@@ -60,15 +60,17 @@
     display: flex;
     flex-direction: column;
     overflow: hidden;
+    min-height: 0;
   }
   .video-area {
-    flex: 1;
+    flex: 1 1 0;
     display: flex;
     align-items: center;
     justify-content: center;
     background: #000;
     position: relative;
     min-height: 0;
+    overflow: hidden;
   }
   .video-wrap {
     position: relative;
@@ -145,6 +147,7 @@
     align-items: center;
     gap: 12px;
     flex-wrap: wrap;
+    flex-shrink: 0;
   }
   .controls-bar button {
     background: var(--panel-2);
@@ -185,7 +188,8 @@
 
   /* TRANSCRIPT */
   .transcript-area {
-    height: 180px;
+    height: 160px;
+    flex-shrink: 0;
     background: var(--panel);
     border-top: 1px solid var(--border);
     padding: 8px 12px;
@@ -219,6 +223,7 @@
     border-left: 1px solid var(--border);
     overflow-y: auto;
     grid-row: 2;
+    min-height: 0;
   }
   .tab-bar {
     display: flex;
@@ -370,7 +375,7 @@
 <div class="app">
   <div class="header">
     <h1>Caption Highlighter</h1>
-    <span class="version" id="versionLabel">v1.1.0</span>
+    <span class="version" id="versionLabel">v1.1.1</span>
     <div class="header-right">
       <span class="update-pill" id="updatePill">Update available — click to install</span>
       <button id="checkUpdateBtn" style="background:var(--panel-2);color:var(--text);border:1px solid var(--border);padding:4px 10px;border-radius:4px;cursor:pointer;font-size:11px;">Check for updates</button>
@@ -394,6 +399,7 @@
       <button id="exportBtn" disabled>Export Video</button>
       <button id="mediaEncoderBtn" disabled>Send to Media Encoder</button>
       <button id="fullscreenBtn" disabled>Fullscreen Preview</button>
+      <button id="newVideoBtn" disabled>Load Different Video</button>
       <button id="showFolderBtn" disabled>Show in Folder</button>
       <button id="openVideoBtn" disabled>Open Output</button>
       <div class="progress-bar" id="progressBar"><div class="progress-fill" id="progressFill"></div></div>
@@ -452,6 +458,8 @@
         <label for="boldCheck">Bold</label>
         <input type="checkbox" id="italicCheck" style="margin-left:12px;">
         <label for="italicCheck">Italic</label>
+        <input type="checkbox" id="noOutlineCheck" style="margin-left:12px;">
+        <label for="noOutlineCheck">No outline</label>
       </div>
       <div class="checkbox-row">
         <input type="checkbox" id="highlightBoxCheck">
@@ -516,6 +524,29 @@
       <p style="font-size:12px;color:var(--text-dim);">
         Exported video will be a new MP4 with captions and shapes baked into the frames.
       </p>
+      <div class="field">
+        <label>Export size</label>
+        <select id="exportSize">
+          <option value="source">Match source (default)</option>
+          <option value="3840x2160">4K UHD — 3840×2160</option>
+          <option value="1920x1080">1080p — 1920×1080</option>
+          <option value="1280x720">720p — 1280×720</option>
+          <option value="1080x1920">Vertical 9:16 — 1080×1920</option>
+          <option value="1080x1080">Square 1:1 — 1080×1080</option>
+          <option value="custom">Custom…</option>
+        </select>
+      </div>
+      <div class="row" id="customSizeRow" style="display:none;">
+        <div class="field">
+          <label>Width</label>
+          <input type="number" id="customWidth" min="2" step="2" value="1920">
+        </div>
+        <div class="field">
+          <label>Height</label>
+          <input type="number" id="customHeight" min="2" step="2" value="1080">
+        </div>
+      </div>
+      <p id="sizeNote" style="font-size:11px;color:var(--text-dim);"></p>
       <div class="field">
         <label>Output path</label>
         <input type="text" id="outputPath" readonly placeholder="(choose when exporting)">
@@ -604,12 +635,24 @@ async function loadVideo(p) {
   const info = await window.api.probeVideo(p);
   state.videoSize = { width: info.width, height: info.height };
   const vid = $('videoEl');
-  vid.src = 'file://' + p;
+  vid.src = pathToFileURL(p);
   $('videoWrap').style.display = 'block';
   $('dropZone').style.display = 'none';
   $('transcribeBtn').disabled = false;
   $('fullscreenBtn').disabled = false;
+  $('newVideoBtn').disabled = false;
+  updateSizeUI();
   setStatus(`Loaded ${p.split(/[\\/]/).pop()} (${info.width}×${info.height})`);
+}
+
+// Convert a Windows/Unix path to a valid file:// URL (handles spaces, backslashes, etc.)
+function pathToFileURL(p) {
+  let normalized = p.replace(/\\/g, '/');
+  // Ensure leading slash for Windows drive paths: C:/... -> /C:/...
+  if (/^[A-Za-z]:/.test(normalized)) normalized = '/' + normalized;
+  // Encode each path segment but keep the slashes
+  const encoded = normalized.split('/').map(seg => encodeURIComponent(seg)).join('/');
+  return 'file://' + encoded;
 }
 
 // ─── TRANSCRIBE ──────────────────────────────────────────────────────────
@@ -704,7 +747,22 @@ function groupWordsIntoCaptions(words) {
 }
 
 function wrapIntoLines(words, maxLines) {
-  // Distribute words evenly across maxLines
+  // If the user set manual line breaks (breakAfter), honor those exactly.
+  const hasManual = words.some(w => w.breakAfter);
+  if (hasManual) {
+    const lines = [];
+    let cur = [];
+    words.forEach((w, i) => {
+      cur.push(i);
+      if (w.breakAfter && i < words.length - 1) {
+        lines.push(cur);
+        cur = [];
+      }
+    });
+    if (cur.length) lines.push(cur);
+    return lines;
+  }
+  // Otherwise auto-distribute evenly across maxLines
   if (maxLines === 1) return [words.map((_, i) => i)];
   const perLine = Math.ceil(words.length / maxLines);
   const lines = [];
@@ -735,6 +793,14 @@ function renderTranscript() {
       showWordCtxMenu(e.clientX, e.clientY, i);
     });
     wrap.appendChild(span);
+    if (w.breakAfter) {
+      const brk = document.createElement('span');
+      brk.textContent = ' ↵ ';
+      brk.style.color = 'var(--accent)';
+      brk.style.fontWeight = 'bold';
+      brk.title = 'Line break';
+      wrap.appendChild(brk);
+    }
     wrap.appendChild(document.createTextNode(' '));
   });
 }
@@ -770,6 +836,8 @@ function showWordCtxMenu(x, y, idx) {
   const items = [
     { label: 'Edit', fn: () => beginEditWord($('transcriptWords').querySelector(`[data-index="${idx}"]`), idx) },
     { label: 'Delete', fn: () => { state.words.splice(idx, 1); state.captions = groupWordsIntoCaptions(state.words); renderTranscript(); renderOverlay(); } },
+    null,
+    { label: state.words[idx]?.breakAfter ? 'Remove line break after' : 'Add line break after', fn: () => toggleBreak(idx) },
     null,
     { label: 'Insert before', fn: () => insertWordAt(idx, 'before') },
     { label: 'Insert after', fn: () => insertWordAt(idx, 'after') },
@@ -809,6 +877,14 @@ function insertWordAt(idx, where) {
   renderOverlay();
 }
 
+function toggleBreak(idx) {
+  if (!state.words[idx]) return;
+  state.words[idx].breakAfter = !state.words[idx].breakAfter;
+  state.captions = groupWordsIntoCaptions(state.words);
+  renderTranscript();
+  renderOverlay();
+}
+
 function mergeWords(idx) {
   if (idx >= state.words.length - 1) return;
   const a = state.words[idx], b = state.words[idx + 1];
@@ -842,37 +918,45 @@ function renderOverlay() {
     setTimeout(renderOverlay, 200);
     return;
   }
-  const rect = video.getBoundingClientRect();
-  const scaleX = rect.width / state.videoSize.width;
-  const scaleY = rect.height / state.videoSize.height;
+  const videoRect = video.getBoundingClientRect();
+  const wrapRect = $('videoWrap').getBoundingClientRect();
+  // Offset of the video within the wrap (non-zero in fullscreen where the video
+  // is centered/letterboxed inside a larger flex container).
+  const offsetX = videoRect.left - wrapRect.left;
+  const offsetY = videoRect.top - wrapRect.top;
+  const scaleX = videoRect.width / state.videoSize.width;
+  const scaleY = videoRect.height / state.videoSize.height;
+  // Stash for child renderers
+  overlay._offsetX = offsetX;
+  overlay._offsetY = offsetY;
 
   // Captions: only render the one for current time, but show all in edit mode
   const t = video.currentTime;
   state.captions.forEach((cap) => {
     if (t < cap.start || t > cap.end) return;
-    renderCaptionBox(cap, scaleX, scaleY);
+    renderCaptionBox(cap, scaleX, scaleY, offsetX, offsetY);
   });
 
   // Shapes
   state.shapes.forEach((s) => {
     if (t < s.start || t > s.end) return;
-    renderShapeBox(s, scaleX, scaleY);
+    renderShapeBox(s, scaleX, scaleY, offsetX, offsetY);
   });
 }
 
-function renderCaptionBox(cap, scaleX, scaleY) {
+function renderCaptionBox(cap, scaleX, scaleY, offsetX = 0, offsetY = 0) {
   const overlay = $('overlay');
   const div = document.createElement('div');
   div.className = 'caption-box';
   if (state.selectedCaption === cap.id) div.classList.add('selected');
-  div.style.left = (cap.x * scaleX) + 'px';
-  div.style.top = (cap.y * scaleY) + 'px';
+  div.style.left = (offsetX + cap.x * scaleX) + 'px';
+  div.style.top = (offsetY + cap.y * scaleY) + 'px';
   div.style.fontFamily = $('fontSelect').value || 'Arial';
   div.style.fontSize = ($('fontSize').value * scaleY * 0.5) + 'px';
   div.style.fontWeight = $('boldCheck').checked ? 'bold' : 'normal';
   div.style.fontStyle = $('italicCheck').checked ? 'italic' : 'normal';
   div.style.color = $('baseColor').value;
-  div.style.webkitTextStroke = `1px ${$('outlineColor').value}`;
+  div.style.webkitTextStroke = $('noOutlineCheck').checked ? 'none' : `1px ${$('outlineColor').value}`;
 
   // Render with line breaks
   const t = $('videoEl').currentTime;
@@ -907,8 +991,8 @@ function renderCaptionBox(cap, scaleX, scaleY) {
     const dy = (e.clientY - dragStart.y) / scaleY;
     cap.x = dragStart.origX + dx;
     cap.y = dragStart.origY + dy;
-    div.style.left = (cap.x * scaleX) + 'px';
-    div.style.top = (cap.y * scaleY) + 'px';
+    div.style.left = (offsetX + cap.x * scaleX) + 'px';
+    div.style.top = (offsetY + cap.y * scaleY) + 'px';
   });
   document.addEventListener('mouseup', () => { dragStart = null; });
 
@@ -953,13 +1037,13 @@ function renderCaptionBox(cap, scaleX, scaleY) {
   overlay.appendChild(div);
 }
 
-function renderShapeBox(s, scaleX, scaleY) {
+function renderShapeBox(s, scaleX, scaleY, offsetX = 0, offsetY = 0) {
   const overlay = $('overlay');
   const div = document.createElement('div');
   div.className = 'shape-box';
   if (state.selectedShape === s.id) div.classList.add('selected');
-  div.style.left = (s.x * scaleX) + 'px';
-  div.style.top = (s.y * scaleY) + 'px';
+  div.style.left = (offsetX + s.x * scaleX) + 'px';
+  div.style.top = (offsetY + s.y * scaleY) + 'px';
   div.style.width = (s.w * scaleX) + 'px';
   div.style.height = (s.h * scaleY) + 'px';
   if (s.type === 'circle') {
@@ -1005,8 +1089,8 @@ function renderShapeBox(s, scaleX, scaleY) {
       if (c.includes('b')) s.h = Math.max(10, drag.origH + dy);
       if (c.includes('t')) { s.h = Math.max(10, drag.origH - dy); s.y = drag.origY + dy; }
     }
-    div.style.left = (s.x * scaleX) + 'px';
-    div.style.top = (s.y * scaleY) + 'px';
+    div.style.left = (offsetX + s.x * scaleX) + 'px';
+    div.style.top = (offsetY + s.y * scaleY) + 'px';
     div.style.width = (s.w * scaleX) + 'px';
     div.style.height = (s.h * scaleY) + 'px';
   });
@@ -1111,10 +1195,46 @@ function buildStyle() {
     outlineColor: $('outlineColor').value,
     bold: $('boldCheck').checked,
     italic: $('italicCheck').checked,
+    noOutline: $('noOutlineCheck').checked,
     highlightBox: $('highlightBoxCheck').checked,
     highlightBoxColor: $('highlightBoxColor').value,
   };
 }
+
+// Returns the chosen export resolution, or null to match source.
+function getExportSize() {
+  const val = $('exportSize').value;
+  if (val === 'source') return null;
+  if (val === 'custom') {
+    const w = parseInt($('customWidth').value, 10);
+    const h = parseInt($('customHeight').value, 10);
+    if (!w || !h || w < 2 || h < 2) return null; // invalid → fall back to source
+    return { width: w, height: h };
+  }
+  const [w, h] = val.split('x').map(n => parseInt(n, 10));
+  return { width: w, height: h };
+}
+
+// Toggle custom size row + show a helpful note about source vs target
+function updateSizeUI() {
+  const val = $('exportSize').value;
+  $('customSizeRow').style.display = val === 'custom' ? 'flex' : 'none';
+  const note = $('sizeNote');
+  const target = getExportSize();
+  if (!target) {
+    const s = state.videoSize;
+    note.textContent = s.width ? `Output will match source: ${s.width}×${s.height}` : '';
+  } else {
+    const s = state.videoSize;
+    if (s.width && (s.width !== target.width || s.height !== target.height)) {
+      note.textContent = `Source ${s.width}×${s.height} → ${target.width}×${target.height}. Aspect ratio preserved; letterbox/pillarbox added if ratios differ.`;
+    } else {
+      note.textContent = `Output: ${target.width}×${target.height}`;
+    }
+  }
+}
+$('exportSize').addEventListener('change', updateSizeUI);
+['customWidth', 'customHeight'].forEach(id => $(id).addEventListener('input', updateSizeUI));
 
 $('exportBtn').addEventListener('click', async () => {
   const baseName = state.videoPath.split(/[\\/]/).pop().replace(/\.[^.]+$/, '');
@@ -1131,6 +1251,7 @@ $('exportBtn').addEventListener('click', async () => {
       shapes: state.shapes,
       style: buildStyle(),
       videoSize: state.videoSize,
+      exportSize: getExportSize(),
       outPath,
     });
     state.lastOutputPath = outPath;
@@ -1162,18 +1283,31 @@ $('mediaEncoderBtn').addEventListener('click', async () => {
       shapes: state.shapes,
       style: buildStyle(),
       videoSize: state.videoSize,
+      exportSize: getExportSize(),
       outPath,
     });
+
+    // Render failure (no usable file produced)
+    if (!result.ok) {
+      setStatus('✗ ' + (result.error || 'Media Encoder export failed'));
+      alert((result.error || 'Export failed') +
+        (result.intermediatePath ? '\n\nIntended path:\n' + result.intermediatePath : ''));
+      return;
+    }
+
+    // Render succeeded — file exists
     state.lastOutputPath = result.intermediatePath || outPath;
     $('outputPath').value = state.lastOutputPath;
     $('showFolderBtn').disabled = false;
     $('openVideoBtn').disabled = false;
-    if (result.ok) {
-      setStatus('✓ Intermediate rendered, opening in Media Encoder…');
+
+    if (result.launched) {
+      setStatus('✓ Rendered — Media Encoder opening, drag the highlighted file in');
     } else {
-      setStatus('⚠ Intermediate rendered but ' + (result.error || 'AME not launched'));
-      alert(result.error + '\n\nFile saved to:\n' + (result.intermediatePath || outPath));
+      setStatus('✓ Rendered & revealed in Explorer — open Media Encoder manually');
     }
+    // Show the guidance message so the drag-in step is clear
+    if (result.message) alert(result.message);
   } catch (e) {
     alert('Render failed:\n' + e.message);
     setStatus('✗ Render failed');
@@ -1182,7 +1316,41 @@ $('mediaEncoderBtn').addEventListener('click', async () => {
   }
 });
 
-// ─── CUSTOM FULLSCREEN (video + caption overlay together) ─────────────────
+// ─── LOAD DIFFERENT VIDEO (reset) ─────────────────────────────────────────
+$('newVideoBtn').addEventListener('click', async () => {
+  const p = await window.api.pickVideo();
+  if (!p) return;
+  resetForNewVideo();
+  loadVideo(p);
+});
+
+function resetForNewVideo() {
+  // Clear all per-video state
+  state.words = [];
+  state.captions = [];
+  state.shapes = [];
+  state.selectedCaption = null;
+  state.selectedShape = null;
+  state.lastOutputPath = null;
+  // Clear UI
+  $('overlay').innerHTML = '';
+  $('transcriptWords').innerHTML = '';
+  $('transcriptArea').style.display = 'none';
+  $('shapeList').innerHTML = '';
+  $('shapeProps').style.display = 'none';
+  $('outputPath').value = '';
+  $('whisperLog').textContent = '';
+  $('diagBackend').textContent = '—';
+  $('diagDevice').textContent = '—';
+  $('diagTime').textContent = '—';
+  $('diagSpeed').textContent = '—';
+  // Reset buttons
+  $('exportBtn').disabled = true;
+  $('mediaEncoderBtn').disabled = true;
+  $('showFolderBtn').disabled = true;
+  $('openVideoBtn').disabled = true;
+  setProgress(0);
+}
 $('fullscreenBtn').addEventListener('click', () => {
   const wrap = $('videoWrap');
   if (!document.fullscreenElement) {
@@ -1279,7 +1447,7 @@ $('highlightBoxCheck').addEventListener('change', () => {
   renderOverlay();
 });
 
-['fontSelect', 'fontSize', 'baseColor', 'highlightColor', 'outlineColor', 'boldCheck', 'italicCheck'].forEach(id => {
+['fontSelect', 'fontSize', 'baseColor', 'highlightColor', 'outlineColor', 'boldCheck', 'italicCheck', 'noOutlineCheck'].forEach(id => {
   $(id).addEventListener('input', renderOverlay);
 });
 

@@ -400,8 +400,9 @@ ipcMain.handle('transcribe', async (_e, videoPath, opts = {}) => {
 
 // ─── SHARED RENDER FUNCTION ─────────────────────────────────────────────
 // quality: 'standard' (CRF 20) or 'intermediate' (CRF 12, slow preset)
-function renderVideo({ videoPath, captions, shapes, style, videoSize, outPath, quality }) {
-  // Build ASS subtitle file
+// exportSize: { width, height } target resolution, or null/undefined to match source
+function renderVideo({ videoPath, captions, shapes, style, videoSize, outPath, quality, exportSize }) {
+  // Build ASS subtitle file (always at SOURCE resolution; we scale the whole frame last)
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'caphi-export-'));
   const assPath = path.join(tmpDir, 'subs.ass');
   fs.writeFileSync(assPath, buildAss(captions, style, videoSize), 'utf-8');
@@ -424,6 +425,20 @@ function renderVideo({ videoPath, captions, shapes, style, videoSize, outPath, q
         `color=${color}:t=fill:enable='${enable}'`
       );
     }
+  }
+
+  // Export size: if a target differs from source, scale the whole composited frame.
+  // Captions and shapes were drawn at source res, so scaling last keeps them aligned.
+  // We fit within the target box preserving aspect ratio, then pad to exact dimensions
+  // (letterbox/pillarbox) so the output is exactly the requested resolution.
+  const srcW = videoSize.width, srcH = videoSize.height;
+  if (exportSize && exportSize.width && exportSize.height &&
+      (exportSize.width !== srcW || exportSize.height !== srcH)) {
+    const tw = Math.round(exportSize.width / 2) * 2;   // ensure even (yuv420p needs it)
+    const th = Math.round(exportSize.height / 2) * 2;
+    filters.push(`scale=${tw}:${th}:force_original_aspect_ratio=decrease`);
+    filters.push(`pad=${tw}:${th}:(ow-iw)/2:(oh-ih)/2:black`);
+    filters.push('setsar=1');
   }
 
   const filterChain = filters.join(',');
@@ -466,39 +481,74 @@ ipcMain.handle('export-video', async (_e, payload) => {
 });
 
 // ─── SEND TO MEDIA ENCODER ──────────────────────────────────────────────
-// Burns a high-quality intermediate (CRF 12), then opens it in Adobe Media Encoder
+// Burns a high-quality intermediate (CRF 12), reveals it in Explorer, and opens
+// Adobe Media Encoder. AME has no reliable CLI to auto-queue a loose media file
+// (CLI args are for ExtendScript only, and fail if AME is already running), so the
+// robust UX is: render → reveal the file → open AME → user drags it into the queue.
 ipcMain.handle('send-to-media-encoder', async (_e, payload) => {
-  // 1. Render high-quality intermediate
   const intermediatePath = payload.outPath;
-  await renderVideo({ ...payload, quality: 'intermediate' });
 
-  // 2. Locate Adobe Media Encoder
+  // 1. Render high-quality intermediate
+  try {
+    await renderVideo({ ...payload, quality: 'intermediate' });
+  } catch (e) {
+    return { ok: false, intermediatePath, error: 'Render failed: ' + e.message, stage: 'render' };
+  }
+
+  // Confirm the file actually exists before claiming success
+  if (!fs.existsSync(intermediatePath)) {
+    return { ok: false, intermediatePath, error: 'Render reported success but output file is missing.', stage: 'render' };
+  }
+
+  // 2. Reveal the rendered file in Explorer (always works, helps the drag-in step)
+  try { shell.showItemInFolder(intermediatePath); } catch {}
+
+  // 3. Locate Adobe Media Encoder
   const amePath = findMediaEncoder();
   if (!amePath) {
     return {
-      ok: false,
+      ok: true,
+      launched: false,
       intermediatePath,
-      error: 'Adobe Media Encoder not found in common install locations. The intermediate file was created — you can open it in AME manually.',
+      message: 'Intermediate rendered and revealed in Explorer. Adobe Media Encoder was not found automatically — open it manually and drag the file into the queue.',
     };
   }
 
-  // 3. Launch AME with the intermediate file
+  // 4. Launch AME (without args — arg-passing is unreliable). If AME is already
+  //    open this is a no-op focus; either way the user drags the revealed file in.
   return new Promise((resolve) => {
-    const proc = spawn(amePath, [intermediatePath], {
-      detached: true,
-      stdio: 'ignore',
-      windowsHide: false,
-    });
+    let settled = false;
+    const finish = (result) => { if (!settled) { settled = true; resolve(result); } };
+
+    let proc;
+    try {
+      proc = spawn(amePath, [], { detached: true, stdio: 'ignore', windowsHide: false });
+    } catch (e) {
+      return finish({
+        ok: true, launched: false, intermediatePath, amePath,
+        message: 'Intermediate rendered. Could not auto-launch AME (' + e.message + '). Open it manually and drag the revealed file into the queue.',
+      });
+    }
+
     proc.on('error', (err) => {
-      resolve({ ok: false, intermediatePath, error: 'Failed to launch AME: ' + err.message });
+      finish({
+        ok: true, launched: false, intermediatePath, amePath,
+        message: 'Intermediate rendered. AME launch failed (' + err.message + '). Open it manually and drag the revealed file into the queue.',
+      });
     });
     proc.unref();
-    // Give it a moment to fail-fast on spawn errors
-    setTimeout(() => resolve({ ok: true, intermediatePath, amePath }), 500);
+
+    // Resolve as launched after a short grace period if no spawn error fired.
+    setTimeout(() => finish({
+      ok: true, launched: true, intermediatePath, amePath,
+      message: 'Intermediate rendered and revealed. Adobe Media Encoder is opening — drag the highlighted file into the queue, then pick your export settings.',
+    }), 800);
   });
 });
 
-// Search common Adobe Media Encoder install paths (newest year first)
+// Search common Adobe Media Encoder install paths (newest version first).
+// Handles both the modern "Support Files" layout and the flat layout, and
+// matches folder names like "Adobe Media Encoder 2024", "... CC 2019", etc.
 function findMediaEncoder() {
   const bases = [
     process.env['ProgramFiles'] || 'C:\\Program Files',
@@ -508,20 +558,24 @@ function findMediaEncoder() {
   for (const base of bases) {
     const adobeDir = path.join(base, 'Adobe');
     if (!fs.existsSync(adobeDir)) continue;
+    let entries;
     try {
-      const entries = fs.readdirSync(adobeDir)
-        .filter(d => /Adobe Media Encoder/i.test(d))
-        .sort()
-        .reverse(); // newest year first
-      for (const dir of entries) {
-        // exe is usually "Adobe Media Encoder.exe" inside the version folder
-        const exe = path.join(adobeDir, dir, 'Adobe Media Encoder.exe');
-        if (fs.existsSync(exe)) candidates.push(exe);
-        // some versions nest under a subfolder
-        const exe2 = path.join(adobeDir, dir, 'Support Files', 'Adobe Media Encoder.exe');
-        if (fs.existsSync(exe2)) candidates.push(exe2);
+      entries = fs.readdirSync(adobeDir).filter(d => /Adobe Media Encoder/i.test(d));
+    } catch { continue; }
+    // Sort so the highest year/version comes first (e.g. 2025 before 2024, CC 2019 last)
+    entries.sort().reverse();
+    for (const dir of entries) {
+      const versionRoot = path.join(adobeDir, dir);
+      const possible = [
+        path.join(versionRoot, 'Support Files', 'Adobe Media Encoder.exe'),
+        path.join(versionRoot, 'Adobe Media Encoder.exe'),
+        path.join(versionRoot, 'Support Files', 'AME.exe'),
+        path.join(versionRoot, 'AME.exe'),
+      ];
+      for (const exe of possible) {
+        try { if (fs.existsSync(exe)) candidates.push(exe); } catch {}
       }
-    } catch {}
+    }
   }
   return candidates[0] || null;
 }
@@ -544,6 +598,8 @@ function buildAss(captions, style, videoSize) {
   const useBox = !!style.highlightBox; // per-word background box behind active word
   const bold = style.bold ? -1 : 0;
   const italic = style.italic ? -1 : 0;
+  const outlineW = style.noOutline ? 0 : 3;   // Outline thickness (0 = none)
+  const shadowW = style.noOutline ? 0 : 1;    // Shadow off when no outline
 
   const header = [
     '[Script Info]',
@@ -556,7 +612,7 @@ function buildAss(captions, style, videoSize) {
     '[V4+ Styles]',
     'Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding',
     // Main style: BorderStyle 1 = outline+shadow
-    `Style: Default,${font},${size},${baseColor},${baseColor},${outline},&H80000000,${bold},${italic},0,0,100,100,0,0,1,3,1,5,30,30,30,1`,
+    `Style: Default,${font},${size},${baseColor},${baseColor},${outline},&H80000000,${bold},${italic},0,0,100,100,0,0,1,${outlineW},${shadowW},5,30,30,30,1`,
     // Box style: BorderStyle 3 = opaque box (the box IS the highlight background)
     `Style: Box,${font},${size},${baseColor},${baseColor},${boxColor},${boxColor},${bold},${italic},0,0,100,100,0,0,3,4,0,5,30,30,30,1`,
     '',
