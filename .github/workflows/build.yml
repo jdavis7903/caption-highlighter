@@ -38,7 +38,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           New-Item -ItemType Directory -Force -Path bin | Out-Null
-          $url = 'https://github.com/ggml-org/whisper.cpp/releases/download/v1.7.4/whisper-cublas-12.4.0-bin-x64.zip'
+          $url = 'https://github.com/ggml-org/whisper.cpp/releases/download/v1.8.4/whisper-cublas-12.4.0-bin-x64.zip'
           Write-Host "Downloading whisper CUDA build..."
           Invoke-WebRequest -Uri $url -OutFile whisper.zip -UseBasicParsing
           Expand-Archive -Path whisper.zip -DestinationPath whisper-tmp -Force
@@ -47,6 +47,18 @@ jobs:
             Copy-Item $_.FullName -Destination bin -Force
           }
           Remove-Item whisper.zip, whisper-tmp -Recurse -Force
+          # Ensure whisper-cli.exe exists. Older builds shipped main.exe; some ship whisper.exe.
+          if (-not (Test-Path bin/whisper-cli.exe)) {
+            if (Test-Path bin/main.exe) {
+              Copy-Item bin/main.exe bin/whisper-cli.exe -Force
+              Write-Host "Aliased main.exe -> whisper-cli.exe"
+            } elseif (Test-Path bin/whisper.exe) {
+              Copy-Item bin/whisper.exe bin/whisper-cli.exe -Force
+              Write-Host "Aliased whisper.exe -> whisper-cli.exe"
+            } else {
+              Write-Host "WARNING: no recognizable whisper executable found in zip!"
+            }
+          }
           Write-Host "whisper.cpp + CUDA DLLs installed:"
           Get-ChildItem bin | Select-Object Name, Length | Format-Table
 
