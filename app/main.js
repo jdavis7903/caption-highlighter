@@ -46,12 +46,17 @@ function createWindow() {
 
 app.whenReady().then(() => {
   createWindow();
-  // Check for updates 3 seconds after launch (let UI settle first)
+  // Auto-check for updates 3s after launch — but only if a token is configured
+  // (private repos require one, and checking without it just throws a 404 error
+  // that would alarm the user). They can always check manually from settings.
   if (isPackaged) {
     setTimeout(() => {
-      autoUpdater.checkForUpdates().catch(err => {
-        console.log('Update check failed:', err.message);
-      });
+      const hasToken = applyUpdaterToken();
+      if (hasToken) {
+        autoUpdater.checkForUpdates().catch(err => {
+          console.log('Update check failed:', err.message);
+        });
+      }
     }, 3000);
   }
 });
@@ -60,9 +65,66 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
 
+// ─── SETTINGS PERSISTENCE ───────────────────────────────────────────────
+function settingsPath() {
+  return path.join(app.getPath('userData'), 'settings.json');
+}
+function loadSettings() {
+  try {
+    return JSON.parse(fs.readFileSync(settingsPath(), 'utf-8'));
+  } catch { return {}; }
+}
+function saveSettings(obj) {
+  try {
+    const cur = loadSettings();
+    const next = { ...cur, ...obj };
+    fs.writeFileSync(settingsPath(), JSON.stringify(next, null, 2), 'utf-8');
+    return true;
+  } catch (e) {
+    console.error('saveSettings failed:', e);
+    return false;
+  }
+}
+
+ipcMain.handle('get-setting', (_e, key) => {
+  const s = loadSettings();
+  return s[key] ?? null;
+});
+ipcMain.handle('set-setting', (_e, key, value) => {
+  return saveSettings({ [key]: value });
+});
+
 // ─── AUTO UPDATER ───────────────────────────────────────────────────────
 autoUpdater.autoDownload = false;
 autoUpdater.autoInstallOnAppQuit = true;
+// Disable electron-updater's built-in error dialog so we control the UX
+autoUpdater.logger = {
+  info: (m) => console.log('[updater]', m),
+  warn: (m) => console.warn('[updater]', m),
+  error: (m) => console.error('[updater]', m),
+  debug: () => {},
+};
+
+// For private GitHub repos, the updater needs a token. We read it from settings
+// and apply it before each check via setFeedURL.
+function applyUpdaterToken() {
+  const settings = loadSettings();
+  const token = settings.githubToken;
+  if (!token) return false;
+  try {
+    autoUpdater.setFeedURL({
+      provider: 'github',
+      owner: 'jdavis7903',
+      repo: 'caption-highlighter',
+      private: true,
+      token: token,
+    });
+    return true;
+  } catch (e) {
+    console.error('Failed to set updater feed URL:', e);
+    return false;
+  }
+}
 
 autoUpdater.on('update-available', (info) => {
   if (mainWindow) mainWindow.webContents.send('update-available', info);
@@ -81,6 +143,7 @@ autoUpdater.on('error', (err) => {
 });
 
 ipcMain.handle('check-for-update', async () => {
+  applyUpdaterToken();
   try {
     const result = await autoUpdater.checkForUpdates();
     return { ok: true, info: result?.updateInfo };
@@ -90,6 +153,7 @@ ipcMain.handle('check-for-update', async () => {
 });
 
 ipcMain.handle('download-update', async () => {
+  applyUpdaterToken();
   try {
     await autoUpdater.downloadUpdate();
     return { ok: true };
@@ -213,6 +277,19 @@ ipcMain.handle('list-fonts', async () => {
 });
 
 // ─── PROBE VIDEO ────────────────────────────────────────────────────────
+// Safely parse ffprobe's "num/den" frame-rate string without eval.
+function parseFrameRate(rate) {
+  if (!rate || typeof rate !== 'string') return 30;
+  const m = /^(\d+)\s*\/\s*(\d+)$/.exec(rate.trim());
+  if (m) {
+    const num = parseInt(m[1], 10), den = parseInt(m[2], 10);
+    if (den > 0) return num / den;
+    return 30;
+  }
+  const n = parseFloat(rate);
+  return Number.isFinite(n) && n > 0 ? n : 30;
+}
+
 ipcMain.handle('probe-video', async (_e, videoPath) => {
   return new Promise((resolve, reject) => {
     execFile(FFPROBE, [
@@ -230,7 +307,7 @@ ipcMain.handle('probe-video', async (_e, videoPath) => {
           width: v?.width || 1920,
           height: v?.height || 1080,
           duration: parseFloat(data.format.duration) || 0,
-          fps: v?.r_frame_rate ? eval(v.r_frame_rate) : 30,
+          fps: parseFrameRate(v?.r_frame_rate),
         });
       } catch (e) {
         reject(e);
@@ -245,6 +322,7 @@ ipcMain.handle('transcribe', async (_e, videoPath, opts = {}) => {
   const wavPath = path.join(tmpDir, 'audio.wav');
   const forceMode = opts.forceMode || 'auto'; // 'auto' | 'gpu' | 'cpu'
 
+  try {
   // Extract mono 16kHz WAV
   await new Promise((resolve, reject) => {
     execFile(FFMPEG, [
@@ -366,7 +444,12 @@ ipcMain.handle('transcribe', async (_e, videoPath, opts = {}) => {
   if (!fs.existsSync(jsonPath)) {
     throw new Error('whisper did not produce JSON output');
   }
-  const raw = JSON.parse(fs.readFileSync(jsonPath, 'utf-8'));
+  let raw;
+  try {
+    raw = JSON.parse(fs.readFileSync(jsonPath, 'utf-8'));
+  } catch (e) {
+    throw new Error('Failed to parse whisper output: ' + e.message);
+  }
 
   // Flatten into word list with timestamps
   const words = [];
@@ -383,9 +466,6 @@ ipcMain.handle('transcribe', async (_e, videoPath, opts = {}) => {
     });
   }
 
-  // Cleanup tmp WAV but keep dir for debugging
-  try { fs.unlinkSync(wavPath); } catch {}
-
   return {
     words,
     gpuUsed: gpuWorked,
@@ -396,7 +476,22 @@ ipcMain.handle('transcribe', async (_e, videoPath, opts = {}) => {
       encodeMs: diag.encodeMs,
     },
   };
+  } finally {
+    // Always clean up the temp dir (WAV + JSON + extras), success or failure.
+    safeRmDir(tmpDir);
+  }
 });
+
+// Recursively remove a temp directory, ignoring errors.
+function safeRmDir(dir) {
+  try {
+    if (dir && fs.existsSync(dir)) {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  } catch (e) {
+    console.error('Temp cleanup failed for', dir, e.message);
+  }
+}
 
 // ─── SHARED RENDER FUNCTION ─────────────────────────────────────────────
 // quality: 'standard' (CRF 20) or 'intermediate' (CRF 12, slow preset)
@@ -468,10 +563,14 @@ function renderVideo({ videoPath, captions, shapes, style, videoSize, outPath, q
       }
     });
     proc.on('close', (code) => {
+      safeRmDir(tmpDir);  // remove the .ass temp dir
       if (code === 0) resolve({ outPath });
       else reject(new Error(`ffmpeg failed (exit ${code})\n${stderr.slice(-800)}`));
     });
-    proc.on('error', reject);
+    proc.on('error', (err) => {
+      safeRmDir(tmpDir);
+      reject(err);
+    });
   });
 }
 
@@ -611,10 +710,10 @@ function buildAss(captions, style, videoSize) {
     '',
     '[V4+ Styles]',
     'Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding',
-    // Main style: BorderStyle 1 = outline+shadow
+    // Main style: BorderStyle 1 = outline+shadow. The per-word highlight box is
+    // applied inline via \3c + \bord overrides (see renderWord), so no separate
+    // Box style is needed here.
     `Style: Default,${font},${size},${baseColor},${baseColor},${outline},&H80000000,${bold},${italic},0,0,100,100,0,0,1,${outlineW},${shadowW},5,30,30,30,1`,
-    // Box style: BorderStyle 3 = opaque box (the box IS the highlight background)
-    `Style: Box,${font},${size},${baseColor},${baseColor},${boxColor},${boxColor},${bold},${italic},0,0,100,100,0,0,3,4,0,5,30,30,30,1`,
     '',
     '[Events]',
     'Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text',

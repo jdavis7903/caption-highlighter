@@ -82,13 +82,14 @@
     max-width: 100%;
     max-height: 100%;
   }
-  /* Overlay for captions + shapes (positioned over video) */
+  /* Overlay for captions + shapes (positioned over video).
+     The overlay itself NEVER captures clicks — only caption/shape children do.
+     This keeps the native video controls (play/scrub) and fullscreen controls clickable. */
   .overlay {
     position: absolute;
     inset: 0;
     pointer-events: none;
   }
-  .overlay.editing { pointer-events: auto; }
   .caption-box {
     position: absolute;
     transform: translate(-50%, -50%);
@@ -157,13 +158,47 @@
     border-radius: 4px;
     cursor: pointer;
     font-size: 12px;
+    transition: background 0.12s, border-color 0.12s;
   }
-  .controls-bar button:hover:not(:disabled) { background: #3a3a3a; }
-  .controls-bar button:disabled { opacity: 0.4; cursor: not-allowed; }
+  .controls-bar button:hover:not(:disabled) { background: #3a3a3a; border-color: #4a4a4a; }
+  .controls-bar button:active:not(:disabled) { transform: translateY(1px); }
+  .controls-bar button:disabled { opacity: 0.35; cursor: not-allowed; }
   .controls-bar button.primary {
     background: var(--accent);
     border-color: var(--accent);
     color: white;
+    font-weight: 500;
+  }
+  .controls-bar button.primary:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
+  .controls-bar button.primary:disabled { opacity: 0.4; }
+  /* Gentle pulse to draw the eye to Transcribe once a video is loaded */
+  @keyframes readyPulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(74,158,255,0.0); }
+    50% { box-shadow: 0 0 0 4px rgba(74,158,255,0.25); }
+  }
+  .controls-bar button.ready-hint:not(:disabled) { animation: readyPulse 1.8s ease-in-out 2; }
+  .ctl-sep {
+    width: 1px;
+    align-self: stretch;
+    background: var(--border);
+    margin: 2px 2px;
+  }
+  .progress-wrap {
+    display: none;
+    align-items: center;
+    gap: 8px;
+    flex: 1;
+    min-width: 120px;
+  }
+  .progress-wrap.visible { display: flex; }
+  .status-label {
+    font-size: 11px;
+    color: var(--text-dim);
+    margin-left: auto;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 40%;
   }
   .controls-bar button.primary:hover:not(:disabled) { background: var(--accent-hover); }
 
@@ -173,18 +208,15 @@
     background: var(--panel-2);
     border-radius: 4px;
     overflow: hidden;
-    display: none;
     min-width: 100px;
   }
-  .progress-bar.visible { display: block; }
   .progress-fill {
     height: 100%;
     background: var(--accent);
     width: 0%;
     transition: width 0.2s;
   }
-  .progress-label { font-size: 11px; color: var(--text-dim); display: none; }
-  .progress-label.visible { display: inline; }
+  .progress-label { font-size: 11px; color: var(--text-dim); white-space: nowrap; }
 
   /* TRANSCRIPT */
   .transcript-area {
@@ -238,13 +270,27 @@
     font-size: 12px;
     color: var(--text-dim);
     border-bottom: 2px solid transparent;
+    transition: color 0.12s, background 0.12s;
   }
+  .tab:hover { color: var(--text); background: var(--panel-2); }
   .tab.active {
     color: var(--text);
     border-bottom-color: var(--accent);
+    background: var(--panel);
   }
   .tab-panel { display: none; padding: 12px; }
   .tab-panel.active { display: block; }
+  .tab-badge {
+    display: none;
+    margin-left: 5px;
+    background: var(--accent);
+    color: white;
+    font-size: 10px;
+    border-radius: 8px;
+    padding: 1px 6px;
+    vertical-align: middle;
+  }
+  .tab-badge.visible { display: inline-block; }
 
   .field { margin-bottom: 12px; }
   .field label {
@@ -255,6 +301,7 @@
   }
   .field input[type="text"],
   .field input[type="number"],
+  .field input[type="password"],
   .field select {
     width: 100%;
     background: var(--bg);
@@ -263,6 +310,14 @@
     border-radius: 4px;
     padding: 6px 8px;
     font-size: 12px;
+    transition: border-color 0.12s;
+  }
+  .field input[type="text"]:focus,
+  .field input[type="number"]:focus,
+  .field input[type="password"]:focus,
+  .field select:focus {
+    outline: none;
+    border-color: var(--accent);
   }
   .field input[type="color"] {
     width: 40px;
@@ -271,6 +326,7 @@
     background: var(--bg);
     border-radius: 4px;
     cursor: pointer;
+    vertical-align: middle;
   }
   .row { display: flex; gap: 8px; align-items: center; }
   .row > .field { flex: 1; }
@@ -375,7 +431,7 @@
 <div class="app">
   <div class="header">
     <h1>Caption Highlighter</h1>
-    <span class="version" id="versionLabel">v1.1.1</span>
+    <span class="version" id="versionLabel">v1.1.2</span>
     <div class="header-right">
       <span class="update-pill" id="updatePill">Update available — click to install</span>
       <button id="checkUpdateBtn" style="background:var(--panel-2);color:var(--text);border:1px solid var(--border);padding:4px 10px;border-radius:4px;cursor:pointer;font-size:11px;">Check for updates</button>
@@ -385,8 +441,10 @@
   <div class="main">
     <div class="video-area">
       <div class="drop-zone" id="dropZone">
-        <div style="font-size:32px;margin-bottom:8px;">📹</div>
-        <div>Drop a video here, or click to browse</div>
+        <div style="font-size:40px;margin-bottom:12px;">📹</div>
+        <div style="font-size:15px;color:var(--text);margin-bottom:6px;">Drop a video here, or click to browse</div>
+        <div style="font-size:11px;">Supports MP4, MOV, MKV, AVI, WebM, M4V</div>
+        <div style="font-size:11px;margin-top:16px;opacity:0.7;">Shortcuts: Space = play/pause · ← → = seek · F = fullscreen</div>
       </div>
       <div class="video-wrap" id="videoWrap" style="display:none;">
         <video id="videoEl" controls></video>
@@ -395,20 +453,25 @@
     </div>
 
     <div class="controls-bar">
-      <button id="transcribeBtn" disabled>Transcribe Audio</button>
-      <button id="exportBtn" disabled>Export Video</button>
-      <button id="mediaEncoderBtn" disabled>Send to Media Encoder</button>
-      <button id="fullscreenBtn" disabled>Fullscreen Preview</button>
-      <button id="newVideoBtn" disabled>Load Different Video</button>
-      <button id="showFolderBtn" disabled>Show in Folder</button>
-      <button id="openVideoBtn" disabled>Open Output</button>
-      <div class="progress-bar" id="progressBar"><div class="progress-fill" id="progressFill"></div></div>
-      <span class="progress-label" id="progressLabel">0%</span>
-      <span id="statusLabel" style="font-size:11px;color:var(--text-dim);margin-left:auto;"></span>
+      <button id="transcribeBtn" class="primary" disabled title="Transcribe the audio to generate word-timed captions">Transcribe Audio</button>
+      <span class="ctl-sep"></span>
+      <button id="exportBtn" disabled title="Render a finished MP4 with captions and shapes burned in">Export Video</button>
+      <button id="mediaEncoderBtn" disabled title="Render a high-quality intermediate and open it in Adobe Media Encoder">Send to Media Encoder</button>
+      <span class="ctl-sep"></span>
+      <button id="fullscreenBtn" disabled title="Preview the captions full screen">Fullscreen</button>
+      <button id="newVideoBtn" disabled title="Load a different video (clears current work)">Load Video</button>
+      <span class="ctl-sep"></span>
+      <button id="showFolderBtn" disabled title="Reveal the exported file in Explorer">Show in Folder</button>
+      <button id="openVideoBtn" disabled title="Open the exported file in your default player">Open Output</button>
+      <div class="progress-wrap" id="progressWrap">
+        <div class="progress-bar" id="progressBar"><div class="progress-fill" id="progressFill"></div></div>
+        <span class="progress-label" id="progressLabel">0%</span>
+      </div>
+      <span id="statusLabel" class="status-label"></span>
     </div>
 
     <div class="transcript-area" id="transcriptArea" style="display:none;">
-      <h3>Transcript <span style="float:right;font-size:10px;">click to seek · double-click to edit · right-click for menu</span></h3>
+      <h3>Transcript <span style="float:right;font-size:10px;">click=seek · dbl-click=edit · shift-click=line break · right-click=menu</span></h3>
       <div id="transcriptWords"></div>
     </div>
   </div>
@@ -416,9 +479,10 @@
   <div class="sidebar">
     <div class="tab-bar">
       <div class="tab active" data-tab="captions">Captions</div>
-      <div class="tab" data-tab="shapes">Shapes</div>
+      <div class="tab" data-tab="shapes">Shapes<span id="shapeCount" class="tab-badge"></span></div>
       <div class="tab" data-tab="output">Output</div>
       <div class="tab" data-tab="diag">Diagnostics</div>
+      <div class="tab" data-tab="settings">Settings</div>
     </div>
 
     <div class="tab-panel active" data-panel="captions">
@@ -429,15 +493,9 @@
           <button id="rescanFontsBtn" style="background:var(--panel-2);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:6px 10px;cursor:pointer;font-size:11px;white-space:nowrap;">Rescan</button>
         </div>
       </div>
-      <div class="row">
-        <div class="field">
-          <label>Size</label>
-          <input type="number" id="fontSize" value="48" min="10" max="200">
-        </div>
-        <div class="field">
-          <label>Max width (% of video)</label>
-          <input type="number" id="maxWidth" value="80" min="20" max="100">
-        </div>
+      <div class="field">
+        <label>Size</label>
+        <input type="number" id="fontSize" value="48" min="10" max="200">
       </div>
       <div class="row">
         <div class="field">
@@ -583,6 +641,35 @@
       <label style="font-size:11px;color:var(--text-dim);">whisper log</label>
       <pre id="whisperLog" style="background:#0d0d0d;border:1px solid var(--border);border-radius:4px;padding:8px;font-size:10px;height:240px;overflow-y:auto;margin:4px 0 0 0;white-space:pre-wrap;color:#9fd49f;"></pre>
     </div>
+
+    <div class="tab-panel" data-panel="settings">
+      <h3 style="margin:0 0 8px 0;font-size:13px;">Auto-updates</h3>
+      <p style="font-size:11px;color:var(--text-dim);margin:0 0 8px 0;">
+        This app's repository is private, so the updater needs a GitHub Personal Access Token to check for new releases.
+      </p>
+      <div class="field">
+        <label>GitHub token</label>
+        <input type="password" id="githubToken" placeholder="ghp_… or github_pat_…">
+      </div>
+      <div class="btn-group">
+        <button id="saveTokenBtn">Save</button>
+        <button id="testUpdateBtn">Test update check</button>
+        <button id="clearTokenBtn">Clear</button>
+      </div>
+      <p id="tokenStatus" style="font-size:11px;color:var(--text-dim);margin:8px 0 12px 0;"></p>
+      <details style="font-size:11px;color:var(--text-dim);">
+        <summary style="cursor:pointer;color:var(--text);">How to create a token</summary>
+        <ol style="padding-left:18px;margin:6px 0;">
+          <li>Go to <span style="color:var(--accent);">github.com/settings/tokens</span></li>
+          <li>Click "Generate new token (classic)"</li>
+          <li>Give it any name (e.g. "Caption app updater")</li>
+          <li>Set expiration as you like (longer = fewer renewals)</li>
+          <li>Under scopes, check only <strong style="color:var(--text);">repo</strong> (full control of private repos)</li>
+          <li>Click "Generate token", copy it, paste it above, and click Save</li>
+        </ol>
+        <p style="margin:6px 0;">The token is stored only on this machine. If you ever want to revoke it, do so on GitHub and clear it here.</p>
+      </details>
+    </div>
   </div>
 </div>
 
@@ -612,6 +699,49 @@ const state = {
 
 const $ = (id) => document.getElementById(id);
 
+// ─── GLOBAL DRAG CONTROLLER ──────────────────────────────────────────────
+// One activeDrag object + one set of document listeners (instead of attaching
+// new listeners on every render — which caused listener accumulation and
+// flaky/finicky drag behavior).
+let activeDrag = null;
+
+document.addEventListener('mousemove', (e) => {
+  if (!activeDrag) return;
+  const d = activeDrag;
+  const dx = (e.clientX - d.startX) / d.scaleX;
+  const dy = (e.clientY - d.startY) / d.scaleY;
+  if (d.kind === 'caption') {
+    d.target.x = d.origX + dx;
+    d.target.y = d.origY + dy;
+    d.el.style.left = (d.offsetX + d.target.x * d.scaleX) + 'px';
+    d.el.style.top = (d.offsetY + d.target.y * d.scaleY) + 'px';
+  } else if (d.kind === 'shape') {
+    const s = d.target;
+    if (d.mode === 'move') {
+      s.x = d.origX + dx;
+      s.y = d.origY + dy;
+    } else if (d.mode === 'resize') {
+      const c = d.corner;
+      if (c.includes('r')) s.w = Math.max(10, d.origW + dx);
+      if (c.includes('l')) { s.w = Math.max(10, d.origW - dx); s.x = d.origX + dx; }
+      if (c.includes('b')) s.h = Math.max(10, d.origH + dy);
+      if (c.includes('t')) { s.h = Math.max(10, d.origH - dy); s.y = d.origY + dy; }
+    }
+    d.el.style.left = (d.offsetX + s.x * d.scaleX) + 'px';
+    d.el.style.top = (d.offsetY + s.y * d.scaleY) + 'px';
+    d.el.style.width = (s.w * d.scaleX) + 'px';
+    d.el.style.height = (s.h * d.scaleY) + 'px';
+  }
+});
+
+document.addEventListener('mouseup', () => {
+  if (activeDrag && activeDrag.kind === 'caption' && activeDrag.target) {
+    // Flag this caption as user-positioned so regrouping preserves its location.
+    activeDrag.target.moved = true;
+  }
+  activeDrag = null;
+});
+
 // ─── DROP / PICK ─────────────────────────────────────────────────────────
 const dropZone = $('dropZone');
 dropZone.addEventListener('click', async () => {
@@ -639,6 +769,7 @@ async function loadVideo(p) {
   $('videoWrap').style.display = 'block';
   $('dropZone').style.display = 'none';
   $('transcribeBtn').disabled = false;
+  $('transcribeBtn').classList.add('ready-hint');
   $('fullscreenBtn').disabled = false;
   $('newVideoBtn').disabled = false;
   updateSizeUI();
@@ -658,8 +789,8 @@ function pathToFileURL(p) {
 // ─── TRANSCRIBE ──────────────────────────────────────────────────────────
 $('transcribeBtn').addEventListener('click', async () => {
   $('transcribeBtn').disabled = true;
-  $('progressBar').classList.add('visible');
-  $('progressLabel').classList.add('visible');
+  $('transcribeBtn').classList.remove('ready-hint');
+  $('progressWrap').classList.add('visible');
   setStatus('Transcribing… (first run may take a while)');
 
   try {
@@ -690,8 +821,7 @@ $('transcribeBtn').addEventListener('click', async () => {
     setStatus('✗ Transcription failed');
   } finally {
     $('transcribeBtn').disabled = false;
-    $('progressBar').classList.remove('visible');
-    $('progressLabel').classList.remove('visible');
+    $('progressWrap').classList.remove('visible');
     setProgress(0);
   }
 });
@@ -717,6 +847,12 @@ function groupWordsIntoCaptions(words) {
   const maxLines = parseInt($('linesPerCap').value, 10) || 2;
   const W = state.videoSize.width;
   const H = state.videoSize.height;
+  const defaultX = W / 2, defaultY = H - 100;
+
+  // Remember previously customized positions so edits don't reset a dragged caption.
+  // Keyed by the caption's start time (rounded); we match the new caption whose
+  // start is closest. moved=true marks captions the user actually dragged.
+  const prevMoved = (state.captions || []).filter(c => c.moved);
 
   const captions = [];
   let cur = [];
@@ -729,15 +865,22 @@ function groupWordsIntoCaptions(words) {
     const tooLong = cur.length >= target && (punct || cur.length >= target + 2);
     const tooFar = words[i].end - curStart > 3.0;
     if (tooLong || tooFar || i === words.length - 1) {
-      // Wrap into lines
       const lines = wrapIntoLines(cur, maxLines);
+      const startT = cur[0].start;
+      // Inherit a dragged position from the nearest previous moved caption (within 0.5s)
+      let x = defaultX, y = defaultY, moved = false;
+      let best = null, bestDist = Infinity;
+      for (const pm of prevMoved) {
+        const dist = Math.abs(pm.start - startT);
+        if (dist < bestDist) { bestDist = dist; best = pm; }
+      }
+      if (best && bestDist <= 0.5) { x = best.x; y = best.y; moved = true; }
       captions.push({
         id: 'cap_' + captions.length,
         words: cur.slice(),
         lines,
-        x: W / 2,
-        y: H - 100,
-        start: cur[0].start,
+        x, y, moved,
+        start: startT,
         end: cur[cur.length - 1].end,
       });
       cur = [];
@@ -783,7 +926,8 @@ function renderTranscript() {
     span.className = 'transcript-word';
     span.dataset.index = i;
     span.textContent = w.text;
-    span.addEventListener('click', () => {
+    span.addEventListener('click', (e) => {
+      if (e.shiftKey) { toggleBreak(i); return; }
       $('videoEl').currentTime = w.start;
       $('videoEl').play();
     });
@@ -910,7 +1054,11 @@ function splitWord(idx) {
 // ─── OVERLAY (captions + shapes on video) ────────────────────────────────
 function renderOverlay() {
   const overlay = $('overlay');
-  overlay.classList.add('editing');
+  // Don't rebuild while the user is actively editing a caption or dragging —
+  // timeupdate fires ~4x/sec during playback and would wipe the edit box or
+  // interrupt the drag. Skip the rebuild; it'll refresh on the next safe tick.
+  if (activeDrag) return;
+  if (overlay.querySelector('.caption-box.editing, [contenteditable="true"]')) return;
   overlay.innerHTML = '';
   const video = $('videoEl');
   if (!video.videoWidth) {
@@ -975,26 +1123,22 @@ function renderCaptionBox(cap, scaleX, scaleY, offsetX = 0, offsetY = 0) {
   });
   div.innerHTML = lineDivs.join('<br>');
 
-  // Drag handler
-  let dragStart = null;
+  // Drag handler — uses global activeDrag, single document listeners (no accumulation).
   div.addEventListener('mousedown', (e) => {
     if (div.contentEditable === 'true') return;
     e.stopPropagation();
+    e.preventDefault();  // prevent text selection during drag
     state.selectedCaption = cap.id;
     state.selectedShape = null;
-    dragStart = { x: e.clientX, y: e.clientY, origX: cap.x, origY: cap.y };
-    renderOverlay();
+    activeDrag = {
+      kind: 'caption',
+      target: cap,
+      el: div,
+      startX: e.clientX, startY: e.clientY,
+      origX: cap.x, origY: cap.y,
+      scaleX, scaleY, offsetX, offsetY,
+    };
   });
-  document.addEventListener('mousemove', (e) => {
-    if (!dragStart) return;
-    const dx = (e.clientX - dragStart.x) / scaleX;
-    const dy = (e.clientY - dragStart.y) / scaleY;
-    cap.x = dragStart.origX + dx;
-    cap.y = dragStart.origY + dy;
-    div.style.left = (offsetX + cap.x * scaleX) + 'px';
-    div.style.top = (offsetY + cap.y * scaleY) + 'px';
-  });
-  document.addEventListener('mouseup', () => { dragStart = null; });
 
   // Double-click to edit text directly on video
   div.addEventListener('dblclick', (e) => {
@@ -1005,32 +1149,48 @@ function renderCaptionBox(cap, scaleX, scaleY, offsetX = 0, offsetY = 0) {
     const finish = () => {
       div.contentEditable = 'false';
       div.classList.remove('editing');
-      // Parse the edited text back into words (preserve original timings proportionally)
-      const newText = div.textContent.trim();
-      const newTokens = newText.split(/\s+/).filter(Boolean);
+      // Read lines from the editable. <br> tags become \n in innerText.
+      const raw = (div.innerText || div.textContent || '').trim();
+      const lines = raw.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+      // Tokens per line, then a flat token list with break flags at line ends
+      const tokensByLine = lines.map(l => l.split(/\s+/).filter(Boolean));
+      const flatTokens = [];
+      tokensByLine.forEach((toks, li) => {
+        toks.forEach((t, ti) => {
+          flatTokens.push({ text: t, breakAfter: (ti === toks.length - 1 && li < tokensByLine.length - 1) });
+        });
+      });
+      if (flatTokens.length === 0) { renderOverlay(); return; }
+
       const origCount = cap.words.length;
-      if (newTokens.length === origCount) {
-        // Same word count — just update text
-        newTokens.forEach((t, i) => cap.words[i].text = t);
+      if (flatTokens.length === origCount && tokensByLine.length === 1) {
+        // Same word count, no new line breaks — just update text (preserve timings)
+        flatTokens.forEach((t, i) => { cap.words[i].text = t.text; });
       } else {
-        // Different count — redistribute timings
+        // Redistribute timings evenly across new tokens
         const totalDur = cap.end - cap.start;
-        const dur = totalDur / newTokens.length;
-        cap.words = newTokens.map((t, i) => ({
-          text: t,
+        const dur = totalDur / flatTokens.length;
+        cap.words = flatTokens.map((t, i) => ({
+          text: t.text,
           start: cap.start + dur * i,
           end: cap.start + dur * (i + 1),
+          breakAfter: t.breakAfter,
         }));
-        cap.lines = wrapIntoLines(cap.words, parseInt($('linesPerCap').value, 10) || 2);
-        // Also push changes back into global words[]
-        rebuildWordsFromCaptions();
-        renderTranscript();
       }
+      // Either way, rebuild the lines from the (possibly new) breakAfter flags
+      cap.lines = wrapIntoLines(cap.words, parseInt($('linesPerCap').value, 10) || 2);
+      rebuildWordsFromCaptions();
+      renderTranscript();
       renderOverlay();
     };
     div.addEventListener('blur', finish, { once: true });
     div.addEventListener('keydown', (ev) => {
       if (ev.key === 'Escape') { ev.preventDefault(); div.blur(); }
+      // Enter inserts a real line break inside the editable
+      if (ev.key === 'Enter' && !ev.shiftKey) {
+        ev.preventDefault();
+        document.execCommand('insertHTML', false, '<br>');
+      }
     });
   });
 
@@ -1055,13 +1215,18 @@ function renderShapeBox(s, scaleX, scaleY, offsetX = 0, offsetY = 0) {
     div.style.border = `${s.stroke || 2}px solid ${hexToRgba(s.color, s.opacity)}`;
   }
 
-  let drag = null;
   div.addEventListener('mousedown', (e) => {
     e.stopPropagation();
+    e.preventDefault();
     state.selectedShape = s.id;
     state.selectedCaption = null;
     selectShape(s.id);
-    drag = { mode: 'move', x: e.clientX, y: e.clientY, origX: s.x, origY: s.y };
+    activeDrag = {
+      kind: 'shape', mode: 'move', target: s, el: div,
+      startX: e.clientX, startY: e.clientY,
+      origX: s.x, origY: s.y, origW: s.w, origH: s.h,
+      scaleX, scaleY, offsetX, offsetY,
+    };
   });
 
   // Resize handles
@@ -1070,31 +1235,16 @@ function renderShapeBox(s, scaleX, scaleY, offsetX = 0, offsetY = 0) {
     h.className = 'resize-handle rh-' + corner;
     h.addEventListener('mousedown', (e) => {
       e.stopPropagation();
-      drag = { mode: 'resize', corner, x: e.clientX, y: e.clientY, origX: s.x, origY: s.y, origW: s.w, origH: s.h };
+      e.preventDefault();
+      activeDrag = {
+        kind: 'shape', mode: 'resize', corner, target: s, el: div,
+        startX: e.clientX, startY: e.clientY,
+        origX: s.x, origY: s.y, origW: s.w, origH: s.h,
+        scaleX, scaleY, offsetX, offsetY,
+      };
     });
     div.appendChild(h);
   });
-
-  document.addEventListener('mousemove', (e) => {
-    if (!drag) return;
-    const dx = (e.clientX - drag.x) / scaleX;
-    const dy = (e.clientY - drag.y) / scaleY;
-    if (drag.mode === 'move') {
-      s.x = drag.origX + dx;
-      s.y = drag.origY + dy;
-    } else if (drag.mode === 'resize') {
-      const c = drag.corner;
-      if (c.includes('r')) s.w = Math.max(10, drag.origW + dx);
-      if (c.includes('l')) { s.w = Math.max(10, drag.origW - dx); s.x = drag.origX + dx; }
-      if (c.includes('b')) s.h = Math.max(10, drag.origH + dy);
-      if (c.includes('t')) { s.h = Math.max(10, drag.origH - dy); s.y = drag.origY + dy; }
-    }
-    div.style.left = (offsetX + s.x * scaleX) + 'px';
-    div.style.top = (offsetY + s.y * scaleY) + 'px';
-    div.style.width = (s.w * scaleX) + 'px';
-    div.style.height = (s.h * scaleY) + 'px';
-  });
-  document.addEventListener('mouseup', () => { drag = null; });
 
   overlay.appendChild(div);
 }
@@ -1136,6 +1286,19 @@ function addShape(type) {
 function renderShapeList() {
   const list = $('shapeList');
   list.innerHTML = '';
+  // Update the tab badge
+  const badge = $('shapeCount');
+  if (badge) {
+    badge.textContent = state.shapes.length;
+    badge.classList.toggle('visible', state.shapes.length > 0);
+  }
+  if (state.shapes.length === 0) {
+    const empty = document.createElement('div');
+    empty.style.cssText = 'padding:16px 8px;text-align:center;color:var(--text-dim);font-size:11px;';
+    empty.textContent = 'No shapes yet. Add one above to draw on the video.';
+    list.appendChild(empty);
+    return;
+  }
   state.shapes.forEach((s, i) => {
     const row = document.createElement('div');
     row.className = 'shape-row';
@@ -1143,9 +1306,9 @@ function renderShapeList() {
     row.innerHTML = `
       <div class="swatch" style="background:${s.color}"></div>
       <span>${s.type} #${i + 1} (${s.start.toFixed(1)}-${s.end.toFixed(1)}s)</span>
-      <button class="del" onclick="event.stopPropagation();deleteShape('${s.id}')">×</button>
+      <button class="del" onclick="event.stopPropagation();deleteShape('${s.id}')" title="Delete shape">×</button>
     `;
-    row.addEventListener('click', () => selectShape(s.id));
+    row.addEventListener('click', () => { selectShape(s.id); renderOverlay(); });
     list.appendChild(row);
   });
 }
@@ -1156,12 +1319,17 @@ function selectShape(id) {
   if (!s) return;
   $('shapeProps').style.display = 'block';
   $('shapeColor').value = s.color;
+  // keep the paired hex input in sync if present
+  const hexSib = $('shapeColor').nextElementSibling;
+  if (hexSib && hexSib.type === 'text') hexSib.value = s.color.toUpperCase();
   $('shapeOpacity').value = s.opacity;
   $('shapeFilled').checked = s.filled;
   $('shapeStart').value = s.start;
   $('shapeEnd').value = s.end;
   renderShapeList();
-  renderOverlay();
+  // NOTE: intentionally NOT calling renderOverlay() here — this is called from
+  // shape mousedown right before a drag, and re-rendering would destroy the very
+  // element the drag references. The selection outline refreshes on next render.
 }
 
 function deleteShape(id) {
@@ -1336,8 +1504,8 @@ function resetForNewVideo() {
   $('overlay').innerHTML = '';
   $('transcriptWords').innerHTML = '';
   $('transcriptArea').style.display = 'none';
-  $('shapeList').innerHTML = '';
   $('shapeProps').style.display = 'none';
+  renderShapeList();  // shows empty-state hint + clears badge
   $('outputPath').value = '';
   $('whisperLog').textContent = '';
   $('diagBackend').textContent = '—';
@@ -1345,6 +1513,7 @@ function resetForNewVideo() {
   $('diagTime').textContent = '—';
   $('diagSpeed').textContent = '—';
   // Reset buttons
+  $('transcribeBtn').classList.remove('ready-hint');
   $('exportBtn').disabled = true;
   $('mediaEncoderBtn').disabled = true;
   $('showFolderBtn').disabled = true;
@@ -1388,8 +1557,7 @@ function setExporting(on) {
   $('exportBtn').disabled = on;
   $('mediaEncoderBtn').disabled = on;
   $('transcribeBtn').disabled = on;
-  $('progressBar').classList.toggle('visible', on);
-  $('progressLabel').classList.toggle('visible', on);
+  $('progressWrap').classList.toggle('visible', on);
   if (!on) setProgress(0);
 }
 
@@ -1503,6 +1671,116 @@ $('updateNow').addEventListener('click', async () => {
   await window.api.downloadUpdate();
 });
 $('updatePill').addEventListener('click', () => $('updateToast').classList.add('visible'));
+
+// ─── HEX INPUTS NEXT TO EVERY COLOR PICKER ───────────────────────────────
+function setupHexInputs() {
+  document.querySelectorAll('input[type="color"]').forEach(picker => {
+    if (picker.dataset.hexBound) return;
+    picker.dataset.hexBound = '1';
+    const hex = document.createElement('input');
+    hex.type = 'text';
+    hex.maxLength = 7;
+    hex.value = picker.value.toUpperCase();
+    hex.style.cssText = 'width:74px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:6px 6px;font-size:11px;margin-left:4px;font-family:monospace;text-transform:uppercase;';
+    hex.title = 'Hex color (e.g. #FF4A4A)';
+    picker.style.verticalAlign = 'middle';
+    picker.insertAdjacentElement('afterend', hex);
+
+    // picker → hex
+    picker.addEventListener('input', () => { hex.value = picker.value.toUpperCase(); });
+    // hex → picker
+    hex.addEventListener('input', () => {
+      let v = hex.value.trim();
+      if (v && !v.startsWith('#')) v = '#' + v;
+      if (/^#[0-9a-f]{6}$/i.test(v)) {
+        picker.value = v.toLowerCase();
+        // fire native input event so existing listeners (preview update) react
+        picker.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+    });
+    hex.addEventListener('blur', () => { hex.value = picker.value.toUpperCase(); });
+  });
+}
+setupHexInputs();
+renderShapeList();  // show empty-state hint from the start
+
+// ─── KEYBOARD SHORTCUTS ──────────────────────────────────────────────────
+document.addEventListener('keydown', (e) => {
+  // Ignore when typing in an input, textarea, select, or editable caption
+  const tag = (e.target.tagName || '').toLowerCase();
+  const editable = e.target.isContentEditable;
+  if (editable || tag === 'input' || tag === 'textarea' || tag === 'select') return;
+
+  const vid = $('videoEl');
+  if (!state.videoPath) return;
+
+  switch (e.key) {
+    case ' ':            // Space → play/pause
+      e.preventDefault();
+      if (vid.paused) vid.play(); else vid.pause();
+      break;
+    case 'ArrowLeft':    // ← back 5s (Shift = fine 0.2s)
+      e.preventDefault();
+      vid.currentTime = Math.max(0, vid.currentTime - (e.shiftKey ? 0.2 : 5));
+      break;
+    case 'ArrowRight':   // → forward 5s
+      e.preventDefault();
+      vid.currentTime = Math.min(vid.duration || 1e9, vid.currentTime + (e.shiftKey ? 0.2 : 5));
+      break;
+    case 'f': case 'F':  // F → fullscreen toggle
+      if (!$('fullscreenBtn').disabled) { e.preventDefault(); $('fullscreenBtn').click(); }
+      break;
+  }
+});
+
+// ─── SETTINGS ────────────────────────────────────────────────────────────
+(async () => {
+  const t = await window.api.getSetting('githubToken');
+  if (t) {
+    $('githubToken').value = t;
+    $('tokenStatus').textContent = '✓ Token saved (auto-update will check on launch)';
+    $('tokenStatus').style.color = 'var(--success)';
+  } else {
+    $('tokenStatus').textContent = 'No token set — auto-update is disabled. Manual install for now.';
+  }
+})();
+
+$('saveTokenBtn').addEventListener('click', async () => {
+  const t = $('githubToken').value.trim();
+  if (!t) {
+    $('tokenStatus').textContent = '✗ Empty token. Paste one or click Clear.';
+    $('tokenStatus').style.color = 'var(--danger)';
+    return;
+  }
+  const ok = await window.api.setSetting('githubToken', t);
+  if (ok) {
+    $('tokenStatus').textContent = '✓ Token saved.';
+    $('tokenStatus').style.color = 'var(--success)';
+  } else {
+    $('tokenStatus').textContent = '✗ Could not save token (disk error).';
+    $('tokenStatus').style.color = 'var(--danger)';
+  }
+});
+
+$('clearTokenBtn').addEventListener('click', async () => {
+  $('githubToken').value = '';
+  await window.api.setSetting('githubToken', '');
+  $('tokenStatus').textContent = 'Token cleared.';
+  $('tokenStatus').style.color = 'var(--text-dim)';
+});
+
+$('testUpdateBtn').addEventListener('click', async () => {
+  $('tokenStatus').textContent = 'Checking…';
+  $('tokenStatus').style.color = 'var(--text-dim)';
+  const r = await window.api.checkForUpdate();
+  if (r.ok) {
+    $('tokenStatus').textContent = r.info ? '✓ Connected. Latest release: v' + r.info.version : '✓ Connected (no updates available)';
+    $('tokenStatus').style.color = 'var(--success)';
+  } else {
+    $('tokenStatus').textContent = '✗ ' + (r.error || 'Update check failed');
+    $('tokenStatus').style.color = 'var(--danger)';
+  }
+});
 
 // ─── UTILS ───────────────────────────────────────────────────────────────
 function setStatus(s) { $('statusLabel').textContent = s; }
