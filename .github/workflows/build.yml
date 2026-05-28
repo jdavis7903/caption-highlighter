@@ -21,7 +21,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
 
       # ── Cache the downloaded binaries so subsequent builds skip the 1.5GB model download
       - name: Cache binaries (whisper, model, ffmpeg)
@@ -79,12 +79,12 @@ jobs:
             'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.en.bin'
           if ($LASTEXITCODE -ne 0) { throw "curl failed with exit $LASTEXITCODE" }
 
-          # Verify file size — model should be approximately 1.5 GB (1533 MB)
+          # Verify file size — model should be at least 1400 MB
           $f = Get-Item 'bin/ggml-medium.en.bin'
           $sizeMB = [math]::Round($f.Length / 1MB, 1)
           Write-Host "Downloaded file size: $sizeMB MB"
-          if ($f.Length -lt 1500MB) {
-            throw "Model download incomplete: got $sizeMB MB, expected ~1533 MB. Aborting build."
+          if ($f.Length -lt 1400MB) {
+            throw "Model download incomplete: got $sizeMB MB, expected ~1462 MB. Aborting build."
           }
           Write-Host "✓ Model downloaded ($sizeMB MB)"
 
