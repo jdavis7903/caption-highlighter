@@ -1,0 +1,62 @@
+{
+  "name": "caption-highlighter",
+  "version": "1.0.1",
+  "description": "Karaoke-style captions for video — local Whisper transcription, FFmpeg export",
+  "author": {
+    "name": "Caption Highlighter"
+  },
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder",
+    "dist:dir": "electron-builder --dir"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.captionhighlighter.app",
+    "productName": "Caption Highlighter",
+    "directories": {
+      "output": "../dist",
+      "buildResources": "../build-resources"
+    },
+    "files": [
+      "**/*",
+      "!node_modules/**/{CHANGELOG.md,README.md,readme.md,*.test.*,*.spec.*}",
+      "!node_modules/**/{__tests__,__mocks__,test,tests,powered-test,example,examples}",
+      "!**/*.{md,d.ts,map}",
+      "!**/{.DS_Store,.git,.svn,.gitignore,.npmignore,.eslintrc,.editorconfig,.travis.yml}"
+    ],
+    "extraResources": [
+      {
+        "from": "../bin",
+        "to": "bin",
+        "filter": ["**/*"]
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        }
+      ],
+      "icon": "../build-resources/icon.ico",
+      "artifactName": "CaptionHighlighter-Setup-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Caption Highlighter",
+      "installerIcon": "../build-resources/icon.ico",
+      "uninstallerIcon": "../build-resources/icon.ico",
+      "installerHeaderIcon": "../build-resources/icon.ico",
+      "deleteAppDataOnUninstall": false
+    }
+  }
+}

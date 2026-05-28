@@ -1,0 +1,1053 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Caption Highlighter</title>
+<style>
+:root {
+  --bg: #0f0f14;
+  --surface: #1a1a22;
+  --surface2: #242430;
+  --border: #2a2a36;
+  --border-light: #3a3a48;
+  --accent: #6366f1;
+  --accent-hover: #818cf8;
+  --success: #4ade80;
+  --warning: #fbbf24;
+  --error: #ef4444;
+  --text-primary: #e8e8f0;
+  --text-secondary: #9999aa;
+  --text-dim: #555566;
+  --radius: 8px;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  background: var(--bg);
+  color: var(--text-primary);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 13px;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* Title bar */
+.titlebar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 18px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+.title { font-size: 14px; font-weight: 600; letter-spacing: 0.02em; }
+.title-sub { color: var(--text-dim); font-size: 11px; }
+.titlebar .spacer { flex: 1; }
+
+.health-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 9px;
+  border-radius: 20px;
+  background: var(--surface2);
+  font-size: 10px;
+  color: var(--text-secondary);
+}
+.health-pill .dot {
+  width: 6px; height: 6px; border-radius: 50%; background: var(--text-dim);
+}
+.health-pill.ok .dot { background: var(--success); }
+.health-pill.err .dot { background: var(--error); }
+
+/* Main split: left = preview/upload, right = controls */
+.main {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+}
+
+.left {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  border-right: 1px solid var(--border);
+}
+
+.right {
+  width: 340px;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  overflow-y: auto;
+}
+
+/* Drop zone */
+.drop-zone {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 40px;
+  border: 2px dashed var(--border-light);
+  margin: 20px;
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.drop-zone:hover, .drop-zone.dragover {
+  background: var(--surface);
+  border-color: var(--accent);
+}
+.drop-icon { font-size: 48px; opacity: 0.4; margin-bottom: 16px; }
+.drop-title { font-size: 18px; font-weight: 500; margin-bottom: 6px; }
+.drop-sub { color: var(--text-secondary); font-size: 12px; }
+
+/* Video preview */
+.video-section {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 20px;
+  gap: 12px;
+  min-height: 0;
+}
+.video-wrap {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #000;
+  border-radius: var(--radius);
+  overflow: hidden;
+  position: relative;
+  min-height: 0;
+}
+/* The video-stage maintains aspect ratio of the video */
+.video-stage {
+  position: relative;
+  max-width: 100%;
+  max-height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+video {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: contain;
+}
+
+.video-info {
+  display: flex;
+  gap: 16px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  padding: 0 4px;
+}
+.video-info span { display: inline-flex; align-items: center; gap: 4px; }
+.video-info .label { color: var(--text-dim); }
+
+.video-actions {
+  display: flex;
+  gap: 8px;
+}
+
+/* Right panel sections */
+.panel-section {
+  padding: 18px 18px;
+  border-bottom: 1px solid var(--border);
+}
+.panel-section:last-child { border-bottom: none; }
+.section-title {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  margin-bottom: 14px;
+}
+
+/* Form rows */
+.field-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.field-row label {
+  font-size: 12px;
+  color: var(--text-secondary);
+  min-width: 78px;
+}
+.field-row .control {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+input[type="text"], input[type="number"] {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-primary);
+  padding: 6px 10px;
+  font-size: 12px;
+  font-family: inherit;
+  width: 100%;
+  outline: none;
+}
+input[type="text"]:focus, input[type="number"]:focus {
+  border-color: var(--accent);
+}
+
+.color-swatch {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  border: 1px solid var(--border-light);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.hex-input { font-family: monospace; width: 80px; flex: none; }
+
+input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  padding: 6px 0;
+}
+.toggle-row label { cursor: pointer; font-size: 12px; }
+
+/* Buttons */
+.btn {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+  padding: 8px 14px;
+  border-radius: 6px;
+  font-size: 12px;
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 0.15s;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.btn:hover { background: var(--border); border-color: var(--border-light); }
+.btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
+  font-weight: 500;
+}
+.btn.primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+.btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.btn.full { width: 100%; justify-content: center; padding: 10px; }
+.btn.large { padding: 12px 18px; font-size: 13px; }
+
+/* Progress */
+.progress-row {
+  margin-top: 14px;
+}
+.progress-label {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+}
+.progress-bar {
+  height: 4px;
+  background: var(--surface2);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.progress-fill {
+  height: 100%;
+  background: var(--accent);
+  width: 0%;
+  transition: width 0.3s ease;
+}
+
+/* Transcript view */
+.transcript-section {
+  max-height: 200px;
+  overflow-y: auto;
+  font-size: 12px;
+  line-height: 1.8;
+  padding: 10px;
+  background: var(--bg);
+  border-radius: 6px;
+  border: 1px solid var(--border);
+}
+.transcript-word {
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 1px 2px;
+  border-radius: 3px;
+}
+.transcript-word.current {
+  background: var(--accent);
+  color: white;
+}
+.transcript-word:hover {
+  background: var(--surface2);
+  color: var(--text-primary);
+}
+
+.empty-transcript {
+  color: var(--text-dim);
+  font-style: italic;
+  font-size: 11px;
+  text-align: center;
+  padding: 18px;
+}
+
+/* Status bar */
+.status-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 18px;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+.status-bar .dot {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--text-dim);
+}
+.status-bar .dot.busy { background: var(--warning); animation: pulse 1s infinite; }
+.status-bar .dot.ok { background: var(--success); }
+.status-bar .dot.err { background: var(--error); }
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+.status-text { flex: 1; }
+
+/* Caption preview overlay (on video) */
+.caption-overlay {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  pointer-events: none;
+  user-select: none;
+  overflow: hidden;
+}
+.caption-overlay .caption-line {
+  position: absolute;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  text-align: center;
+  white-space: nowrap;
+  font-weight: 700;
+  text-shadow: 0 2px 8px rgba(0,0,0,0.7);
+  line-height: 1.1;
+  letter-spacing: 0.5px;
+}
+.caption-overlay .word {
+  display: inline-block;
+  padding: 1px 4px;
+  margin: 0 1px;
+  border-radius: 4px;
+  transition: none;
+}
+
+/* Color picker - native */
+input[type="color"] {
+  border: none;
+  background: none;
+  padding: 0;
+  width: 28px;
+  height: 28px;
+  cursor: pointer;
+  border-radius: 6px;
+}
+input[type="color"]::-webkit-color-swatch-wrapper { padding: 0; }
+input[type="color"]::-webkit-color-swatch { border: 1px solid var(--border-light); border-radius: 6px; }
+
+/* Font dropdown */
+.font-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  margin-top: 4px;
+  background: var(--surface2);
+  border: 1px solid var(--border-light);
+  border-radius: 6px;
+  max-height: 240px;
+  overflow-y: auto;
+  z-index: 100;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+}
+.font-option {
+  padding: 7px 12px;
+  font-size: 13px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--border);
+}
+.font-option:last-child { border-bottom: none; }
+.font-option:hover, .font-option.highlighted {
+  background: var(--accent);
+  color: white;
+}
+.font-option .meta {
+  font-size: 10px;
+  color: var(--text-dim);
+  margin-left: 8px;
+}
+.font-option:hover .meta, .font-option.highlighted .meta {
+  color: rgba(255,255,255,0.7);
+}
+
+/* Hidden file input */
+input[type="file"] { display: none; }
+</style>
+</head>
+<body>
+
+<div class="titlebar">
+  <span class="title">Caption Highlighter</span>
+  <span class="title-sub">v0.1</span>
+  <div class="spacer"></div>
+  <span class="health-pill" id="health-whisper"><span class="dot"></span><span id="health-whisper-text">whisper</span></span>
+  <span class="health-pill" id="health-model"><span class="dot"></span><span id="health-model-text">model</span></span>
+  <span class="health-pill" id="health-ffmpeg"><span class="dot"></span><span id="health-ffmpeg-text">ffmpeg</span></span>
+</div>
+
+<div class="main">
+
+  <div class="left">
+    <!-- Drop zone (shown until video loaded) -->
+    <div class="drop-zone" id="dropZone">
+      <div class="drop-icon">🎬</div>
+      <div class="drop-title">Drop a video here</div>
+      <div class="drop-sub">or click to browse — mp4, mov, mkv, webm</div>
+    </div>
+
+    <!-- Video preview (hidden until video loaded) -->
+    <div class="video-section" id="videoSection" style="display:none">
+      <div class="video-wrap">
+        <div class="video-stage" id="videoStage">
+          <video id="videoEl" controls></video>
+          <div class="caption-overlay" id="captionOverlay" style="display:none"></div>
+        </div>
+      </div>
+      <div class="video-info">
+        <span><span class="label">size:</span> <span id="vidDim">—</span></span>
+        <span><span class="label">duration:</span> <span id="vidDur">—</span></span>
+        <span><span class="label">fps:</span> <span id="vidFps">—</span></span>
+        <span><span class="label">words:</span> <span id="vidWords">—</span></span>
+        <span style="flex:1"></span>
+        <button class="btn" id="btnReplace">Replace</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="right">
+
+    <div class="panel-section">
+      <div class="section-title">Step 1 — Transcribe</div>
+      <button class="btn primary full" id="btnTranscribe" disabled>Transcribe Audio</button>
+      <div class="progress-row" id="transcribeProgress" style="display:none">
+        <div class="progress-label">
+          <span id="transcribeStage">…</span>
+          <span id="transcribePct">0%</span>
+        </div>
+        <div class="progress-bar"><div class="progress-fill" id="transcribeFill"></div></div>
+      </div>
+      <div class="transcript-section" id="transcriptView" style="display:none; margin-top: 12px;"></div>
+    </div>
+
+    <div class="panel-section">
+      <div class="section-title">Step 2 — Style</div>
+
+      <div class="field-row">
+        <label>Font</label>
+        <div class="control" style="position:relative">
+          <input type="text" id="fontInput" value="Arial Black" autocomplete="off" placeholder="Type to search…">
+          <div class="font-dropdown" id="fontDropdown" style="display:none"></div>
+        </div>
+      </div>
+      <div class="field-row">
+        <label>Size (px)</label>
+        <div class="control">
+          <input type="number" id="sizeInput" value="64" min="16" max="200">
+        </div>
+      </div>
+      <div class="field-row">
+        <label>Bold</label>
+        <div class="control">
+          <input type="checkbox" id="boldInput" checked>
+        </div>
+      </div>
+
+      <div class="field-row">
+        <label>Base color</label>
+        <div class="control">
+          <input type="color" id="baseColor" value="#ffffff">
+          <input type="text" id="baseHex" class="hex-input" value="#FFFFFF">
+        </div>
+      </div>
+
+      <div class="field-row">
+        <label>Highlight</label>
+        <div class="control">
+          <input type="color" id="hlColor" value="#ffd700">
+          <input type="text" id="hlHex" class="hex-input" value="#FFD700">
+        </div>
+      </div>
+
+      <div class="toggle-row">
+        <input type="checkbox" id="bgEnabled">
+        <label for="bgEnabled">Background box behind highlighted word</label>
+      </div>
+
+      <div class="field-row" id="bgColorRow" style="display:none">
+        <label>Box color</label>
+        <div class="control">
+          <input type="color" id="bgColor" value="#000000">
+          <input type="text" id="bgHex" class="hex-input" value="#000000">
+        </div>
+      </div>
+
+      <div class="field-row">
+        <label>Y position</label>
+        <div class="control">
+          <input type="number" id="yPos" value="85" min="0" max="100">
+          <span style="font-size:11px; color: var(--text-dim);">% from top</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel-section">
+      <div class="section-title">Step 3 — Export</div>
+      <button class="btn primary full large" id="btnExport" disabled>Export Video</button>
+      <div class="progress-row" id="exportProgress" style="display:none">
+        <div class="progress-label">
+          <span id="exportStage">…</span>
+          <span id="exportPct">0%</span>
+        </div>
+        <div class="progress-bar"><div class="progress-fill" id="exportFill"></div></div>
+      </div>
+      <div style="display:flex; gap:8px; margin-top:10px;">
+        <button class="btn" id="btnOpenInAME" disabled style="flex:1">Send to Media Encoder</button>
+        <button class="btn" id="btnRevealOutput" disabled style="flex:1">Show in Folder</button>
+      </div>
+    </div>
+
+  </div>
+
+</div>
+
+<div class="status-bar">
+  <div class="dot" id="statusDot"></div>
+  <span class="status-text" id="statusText">Ready</span>
+</div>
+
+<input type="file" id="fileInput" accept="video/*">
+
+<script>
+// ─── STATE ──────────────────────────────────────────────────────────────
+let videoPath = null;
+let videoMeta = null;
+let words = [];           // {text, start, end}[]
+let captionGroups = [];   // grouped into captions for display
+
+const $ = (id) => document.getElementById(id);
+
+// ─── HEALTH CHECK ───────────────────────────────────────────────────────
+(async () => {
+  const h = await window.api.checkBinaries();
+  $('health-whisper').classList.toggle('ok', h.whisper);
+  $('health-whisper').classList.toggle('err', !h.whisper);
+  $('health-whisper-text').textContent = h.whisper ? 'whisper ✓' : 'whisper missing';
+
+  $('health-model').classList.toggle('ok', h.model);
+  $('health-model').classList.toggle('err', !h.model);
+  $('health-model-text').textContent = h.model ? 'model ✓' : 'model missing';
+
+  $('health-ffmpeg').classList.toggle('ok', h.ffmpeg);
+  $('health-ffmpeg').classList.toggle('err', !h.ffmpeg);
+  $('health-ffmpeg-text').textContent = h.ffmpeg ? 'ffmpeg ✓' : 'ffmpeg missing';
+
+  if (!h.whisper || !h.model || !h.ffmpeg) {
+    setStatus('err', 'Missing files in bin/ folder — see README');
+  } else {
+    setStatus('ok', 'All systems ready');
+  }
+})();
+
+// ─── LOAD FONTS ─────────────────────────────────────────────────────────
+let installedFonts = [];
+(async () => {
+  try {
+    installedFonts = await window.api.listFonts();
+    console.log(`Loaded ${installedFonts.length} fonts from system`);
+  } catch(e) {
+    console.warn('Font enumeration failed:', e);
+    installedFonts = [];
+  }
+})();
+
+// Font dropdown logic
+const fontInput = $('fontInput');
+const fontDropdown = $('fontDropdown');
+let highlightedFontIdx = -1;
+
+function showFontDropdown(filter) {
+  if (!installedFonts.length) {
+    fontDropdown.style.display = 'none';
+    return;
+  }
+  const f = (filter || '').toLowerCase().trim();
+  const matches = f
+    ? installedFonts.filter(name => name.toLowerCase().includes(f)).slice(0, 50)
+    : installedFonts.slice(0, 50);
+
+  if (!matches.length) {
+    fontDropdown.style.display = 'none';
+    return;
+  }
+
+  fontDropdown.innerHTML = '';
+  matches.forEach((name, i) => {
+    const opt = document.createElement('div');
+    opt.className = 'font-option';
+    opt.style.fontFamily = `"${name}", sans-serif`;
+    opt.textContent = name;
+    if (i === highlightedFontIdx) opt.classList.add('highlighted');
+    opt.addEventListener('mousedown', (e) => {
+      e.preventDefault(); // prevent input blur before click
+      fontInput.value = name;
+      fontDropdown.style.display = 'none';
+      updatePreview();
+    });
+    fontDropdown.appendChild(opt);
+  });
+  fontDropdown.style.display = 'block';
+}
+
+fontInput.addEventListener('focus', () => showFontDropdown(fontInput.value));
+fontInput.addEventListener('input', () => {
+  highlightedFontIdx = -1;
+  showFontDropdown(fontInput.value);
+  updatePreview();
+});
+fontInput.addEventListener('blur', () => {
+  // Small delay so click on option fires first
+  setTimeout(() => { fontDropdown.style.display = 'none'; }, 150);
+});
+fontInput.addEventListener('keydown', (e) => {
+  const opts = fontDropdown.querySelectorAll('.font-option');
+  if (!opts.length || fontDropdown.style.display === 'none') return;
+
+  if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    highlightedFontIdx = Math.min(opts.length - 1, highlightedFontIdx + 1);
+    opts.forEach((o, i) => o.classList.toggle('highlighted', i === highlightedFontIdx));
+    opts[highlightedFontIdx].scrollIntoView({ block: 'nearest' });
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    highlightedFontIdx = Math.max(0, highlightedFontIdx - 1);
+    opts.forEach((o, i) => o.classList.toggle('highlighted', i === highlightedFontIdx));
+    opts[highlightedFontIdx].scrollIntoView({ block: 'nearest' });
+  } else if (e.key === 'Enter' && highlightedFontIdx >= 0) {
+    e.preventDefault();
+    fontInput.value = opts[highlightedFontIdx].textContent;
+    fontDropdown.style.display = 'none';
+    updatePreview();
+  } else if (e.key === 'Escape') {
+    fontDropdown.style.display = 'none';
+  }
+});
+
+
+// ─── DROP ZONE ──────────────────────────────────────────────────────────
+const dropZone = $('dropZone');
+dropZone.addEventListener('click', () => {
+  window.api.pickVideo().then(path => path && loadVideo(path));
+});
+dropZone.addEventListener('dragover', (e) => {
+  e.preventDefault();
+  dropZone.classList.add('dragover');
+});
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+dropZone.addEventListener('drop', (e) => {
+  e.preventDefault();
+  dropZone.classList.remove('dragover');
+  const f = e.dataTransfer.files[0];
+  if (f && f.path) loadVideo(f.path);
+});
+
+$('btnReplace').addEventListener('click', () => {
+  window.api.pickVideo().then(path => path && loadVideo(path));
+});
+
+// ─── LOAD VIDEO ─────────────────────────────────────────────────────────
+async function loadVideo(path) {
+  videoPath = path;
+  $('dropZone').style.display = 'none';
+  $('videoSection').style.display = 'flex';
+  $('videoEl').src = 'file:///' + path.replace(/\\/g, '/');
+
+  setStatus('busy', 'Probing video…');
+  try {
+    videoMeta = await window.api.probeVideo(path);
+    $('vidDim').textContent = `${videoMeta.width}×${videoMeta.height}`;
+    $('vidDur').textContent = formatTime(videoMeta.duration);
+    $('vidFps').textContent = videoMeta.fps.toFixed(2);
+    setStatus('ok', 'Video loaded');
+    $('btnTranscribe').disabled = false;
+    // Trigger resize once we know the dimensions
+    setTimeout(resizeVideoStage, 50);
+  } catch(e) {
+    setStatus('err', 'Probe failed: ' + e.message);
+  }
+}
+
+// ─── TRANSCRIBE ─────────────────────────────────────────────────────────
+$('btnTranscribe').addEventListener('click', async () => {
+  $('btnTranscribe').disabled = true;
+  $('transcribeProgress').style.display = 'block';
+  setStatus('busy', 'Transcribing audio with Whisper…');
+  try {
+    const res = await window.api.transcribe(videoPath);
+    words = res.words;
+    captionGroups = groupWords(words);
+    renderTranscript();
+    $('vidWords').textContent = words.length;
+    $('btnExport').disabled = false;
+    setStatus('ok', `Transcribed ${words.length} words`);
+  } catch(e) {
+    setStatus('err', 'Transcription failed: ' + e.message);
+    $('btnTranscribe').disabled = false;
+  }
+});
+
+window.api.onProgress((data) => {
+  $('transcribeStage').textContent = data.stage;
+  $('transcribePct').textContent = data.percent + '%';
+  $('transcribeFill').style.width = data.percent + '%';
+});
+
+// ─── GROUP WORDS INTO CAPTIONS ──────────────────────────────────────────
+// Combine into ~6-word chunks at natural breaks, max 3s per group
+function groupWords(words) {
+  const groups = [];
+  let current = [];
+  let chunkStart = words[0]?.start ?? 0;
+
+  for (let i = 0; i < words.length; i++) {
+    current.push(words[i]);
+    const chunkDur = words[i].end - chunkStart;
+    const isBreakWord = /[.!?,]$/.test(words[i].text);
+    const tooLong = current.length >= 6 || chunkDur >= 3;
+    if (isBreakWord || tooLong || i === words.length - 1) {
+      groups.push({
+        start: current[0].start,
+        end: current[current.length - 1].end,
+        words: current.slice()
+      });
+      current = [];
+      chunkStart = words[i+1]?.start ?? 0;
+    }
+  }
+  return groups;
+}
+
+// ─── RENDER TRANSCRIPT VIEW ─────────────────────────────────────────────
+function renderTranscript() {
+  const v = $('transcriptView');
+  v.style.display = 'block';
+  v.innerHTML = '';
+  words.forEach((w, i) => {
+    const span = document.createElement('span');
+    span.className = 'transcript-word';
+    span.dataset.index = String(i);
+    span.dataset.start = String(w.start);
+    span.textContent = w.text;
+    span.addEventListener('click', () => {
+      $('videoEl').currentTime = w.start;
+      $('videoEl').play();
+    });
+    v.appendChild(span);
+    v.appendChild(document.createTextNode(' '));
+  });
+}
+
+// ─── LIVE PREVIEW OVERLAY ───────────────────────────────────────────────
+const videoEl = $('videoEl');
+const videoStage = $('videoStage');
+const overlay = $('captionOverlay');
+let lastWordIdx = -1;
+let lastGroupRef = null;
+
+// Use requestAnimationFrame for smooth preview updates while playing
+let rafId = null;
+function startPreviewLoop() {
+  cancelAnimationFrame(rafId);
+  function tick() {
+    updatePreview();
+    rafId = requestAnimationFrame(tick);
+  }
+  tick();
+}
+function stopPreviewLoop() {
+  cancelAnimationFrame(rafId);
+  rafId = null;
+}
+
+videoEl.addEventListener('play', startPreviewLoop);
+videoEl.addEventListener('pause', () => {
+  stopPreviewLoop();
+  updatePreview(); // one final update so the paused frame shows correct word
+});
+videoEl.addEventListener('seeked', updatePreview);
+videoEl.addEventListener('loadedmetadata', () => {
+  resizeVideoStage();
+  updatePreview();
+});
+videoEl.addEventListener('timeupdate', updatePreview);
+
+// Resize the video-stage to maintain aspect ratio inside the video-wrap
+window.addEventListener('resize', resizeVideoStage);
+
+function resizeVideoStage() {
+  if (!videoMeta) return;
+  const wrap = videoStage.parentElement;
+  const wrapW = wrap.clientWidth;
+  const wrapH = wrap.clientHeight;
+  const videoAR = videoMeta.width / videoMeta.height;
+  const wrapAR = wrapW / wrapH;
+
+  let stageW, stageH;
+  if (videoAR > wrapAR) {
+    // video wider than wrap → letterbox top/bottom
+    stageW = wrapW;
+    stageH = wrapW / videoAR;
+  } else {
+    // video taller → letterbox left/right
+    stageH = wrapH;
+    stageW = wrapH * videoAR;
+  }
+  videoStage.style.width = stageW + 'px';
+  videoStage.style.height = stageH + 'px';
+}
+
+function updatePreview() {
+  if (!captionGroups.length || !videoMeta) {
+    overlay.style.display = 'none';
+    return;
+  }
+  const t = videoEl.currentTime;
+
+  // Find active caption group
+  let activeGroup = null;
+  for (const g of captionGroups) {
+    if (t >= g.start && t <= g.end) { activeGroup = g; break; }
+  }
+
+  if (!activeGroup) {
+    overlay.style.display = 'none';
+    // Clear transcript-view highlighting
+    document.querySelectorAll('.transcript-word.current').forEach(el => el.classList.remove('current'));
+    lastWordIdx = -1;
+    lastGroupRef = null;
+    return;
+  }
+
+  // Find active word within group
+  let activeWordIdx = -1;
+  for (let i = 0; i < activeGroup.words.length; i++) {
+    if (t >= activeGroup.words[i].start && t <= activeGroup.words[i].end) {
+      activeWordIdx = i;
+      break;
+    }
+  }
+
+  // Only re-render if group or word changed (perf)
+  if (activeGroup === lastGroupRef && activeWordIdx === lastWordIdx) return;
+  lastGroupRef = activeGroup;
+  lastWordIdx = activeWordIdx;
+
+  // Render overlay
+  overlay.style.display = 'block';
+
+  const style = getStyle();
+
+  // Caption line element
+  overlay.innerHTML = '';
+  const line = document.createElement('div');
+  line.className = 'caption-line';
+
+  // Scale font size to the displayed video size (not the source resolution)
+  const scale = videoStage.clientHeight / videoMeta.height;
+  const displaySize = Math.max(8, style.fontSize * scale);
+  line.style.fontFamily = `"${style.font}", sans-serif`;
+  line.style.fontSize = displaySize + 'px';
+  line.style.fontWeight = style.bold ? '900' : '400';
+  line.style.left = '50%';
+  line.style.top = style.yPercent + '%';
+
+  activeGroup.words.forEach((w, i) => {
+    const span = document.createElement('span');
+    span.className = 'word';
+    span.textContent = w.text;
+    if (i === activeWordIdx) {
+      span.style.color = style.hlColor;
+      if (style.useBg) {
+        span.style.background = style.bgColor;
+      }
+    } else {
+      span.style.color = style.baseColor;
+    }
+    line.appendChild(span);
+  });
+
+  overlay.appendChild(line);
+
+  // Highlight in transcript view too
+  document.querySelectorAll('.transcript-word.current').forEach(el => el.classList.remove('current'));
+  if (activeWordIdx >= 0) {
+    const activeWordObj = activeGroup.words[activeWordIdx];
+    const globalIdx = words.indexOf(activeWordObj);
+    if (globalIdx >= 0) {
+      const el = document.querySelector(`.transcript-word[data-index="${globalIdx}"]`);
+      if (el) {
+        el.classList.add('current');
+        el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      }
+    }
+  }
+}
+
+// ─── COLOR PICKERS SYNC ────────────────────────────────────────────────
+function syncColorPicker(colorId, hexId) {
+  const c = $(colorId), h = $(hexId);
+  c.addEventListener('input', () => { h.value = c.value.toUpperCase(); updatePreview(); });
+  h.addEventListener('change', () => {
+    if (/^#?[0-9a-fA-F]{6}$/.test(h.value)) {
+      const hex = h.value.startsWith('#') ? h.value : '#' + h.value;
+      c.value = hex.toLowerCase();
+      h.value = hex.toUpperCase();
+      updatePreview();
+    }
+  });
+}
+syncColorPicker('baseColor', 'baseHex');
+syncColorPicker('hlColor', 'hlHex');
+syncColorPicker('bgColor', 'bgHex');
+
+$('bgEnabled').addEventListener('change', (e) => {
+  $('bgColorRow').style.display = e.target.checked ? 'flex' : 'none';
+  updatePreview();
+});
+$('sizeInput').addEventListener('input', updatePreview);
+$('yPos').addEventListener('input', updatePreview);
+
+// ─── STYLE GETTER ──────────────────────────────────────────────────────
+function getStyle() {
+  return {
+    font: $('fontInput').value || 'Arial',
+    fontSize: parseInt($('sizeInput').value) || 64,
+    bold: $('boldInput').checked,
+    baseColor: $('baseHex').value,
+    hlColor: $('hlHex').value,
+    bgColor: $('bgHex').value,
+    useBg: $('bgEnabled').checked,
+    yPercent: parseInt($('yPos').value) || 85
+  };
+}
+
+// ─── EXPORT ────────────────────────────────────────────────────────────
+let lastExportedPath = null;
+
+$('btnExport').addEventListener('click', async () => {
+  const suggested = videoPath.split(/[\\/]/).pop().replace(/\.[^.]+$/, '') + '_captioned.mp4';
+  const outputPath = await window.api.pickSave(suggested);
+  if (!outputPath) return;
+
+  $('btnExport').disabled = true;
+  $('btnOpenInAME').disabled = true;
+  $('btnRevealOutput').disabled = true;
+  $('exportProgress').style.display = 'block';
+  setStatus('busy', 'Exporting captioned video…');
+
+  try {
+    await window.api.exportVideo({
+      videoPath,
+      outputPath,
+      captionGroups,
+      style: getStyle(),
+      videoMeta
+    });
+    lastExportedPath = outputPath;
+    setStatus('ok', 'Exported: ' + outputPath);
+    $('btnOpenInAME').disabled = false;
+    $('btnRevealOutput').disabled = false;
+  } catch(e) {
+    setStatus('err', 'Export failed: ' + e.message);
+  } finally {
+    $('btnExport').disabled = false;
+  }
+});
+
+$('btnOpenInAME').addEventListener('click', async () => {
+  if (!lastExportedPath) return;
+  setStatus('busy', 'Opening in Adobe Media Encoder…');
+  try {
+    const result = await window.api.openInAME(lastExportedPath);
+    if (result.success) {
+      setStatus('ok', 'Sent to Adobe Media Encoder');
+    } else {
+      setStatus('err', result.error || 'Could not open Media Encoder');
+    }
+  } catch(e) {
+    setStatus('err', 'AME open failed: ' + e.message);
+  }
+});
+
+$('btnRevealOutput').addEventListener('click', () => {
+  if (!lastExportedPath) return;
+  window.api.revealFile(lastExportedPath);
+});
+
+window.api.onExportProgress((data) => {
+  $('exportStage').textContent = data.stage;
+  $('exportPct').textContent = data.percent + '%';
+  $('exportFill').style.width = data.percent + '%';
+});
+
+// ─── HELPERS ────────────────────────────────────────────────────────────
+function formatTime(sec) {
+  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = Math.floor(sec % 60);
+  return (h ? h + ':' : '') + String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0');
+}
+
+function setStatus(state, msg) {
+  const dot = $('statusDot');
+  dot.className = 'dot ' + (state || '');
+  $('statusText').textContent = msg;
+}
+</script>
+</body>
+</html>
