@@ -4,1049 +4,1349 @@
 <meta charset="UTF-8">
 <title>Caption Highlighter</title>
 <style>
-:root {
-  --bg: #0f0f14;
-  --surface: #1a1a22;
-  --surface2: #242430;
-  --border: #2a2a36;
-  --border-light: #3a3a48;
-  --accent: #6366f1;
-  --accent-hover: #818cf8;
-  --success: #4ade80;
-  --warning: #fbbf24;
-  --error: #ef4444;
-  --text-primary: #e8e8f0;
-  --text-secondary: #9999aa;
-  --text-dim: #555566;
-  --radius: 8px;
-}
+  :root {
+    --bg: #1a1a1a;
+    --panel: #242424;
+    --panel-2: #2d2d2d;
+    --border: #3a3a3a;
+    --text: #e8e8e8;
+    --text-dim: #888;
+    --accent: #4a9eff;
+    --accent-hover: #6bb1ff;
+    --danger: #ff4a4a;
+    --success: #4aff7a;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; height: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    font-size: 13px;
+    overflow: hidden;
+  }
+  .app {
+    display: grid;
+    grid-template-columns: 1fr 340px;
+    grid-template-rows: auto 1fr;
+    height: 100vh;
+  }
+  .header {
+    grid-column: 1 / -1;
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    padding: 8px 16px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .header h1 { margin: 0; font-size: 15px; font-weight: 500; }
+  .version { font-size: 11px; color: var(--text-dim); }
+  .header-right { margin-left: auto; display: flex; gap: 8px; align-items: center; }
+  .update-pill {
+    background: var(--accent);
+    color: white;
+    padding: 4px 10px;
+    border-radius: 12px;
+    font-size: 11px;
+    cursor: pointer;
+    display: none;
+  }
+  .update-pill.visible { display: inline-block; }
+  .update-pill:hover { background: var(--accent-hover); }
 
-* { box-sizing: border-box; margin: 0; padding: 0; }
+  /* MAIN AREA */
+  .main {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .video-area {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #000;
+    position: relative;
+    min-height: 0;
+  }
+  .video-wrap {
+    position: relative;
+    max-width: 100%;
+    max-height: 100%;
+  }
+  #videoEl {
+    display: block;
+    max-width: 100%;
+    max-height: 100%;
+  }
+  /* Overlay for captions + shapes (positioned over video) */
+  .overlay {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+  }
+  .overlay.editing { pointer-events: auto; }
+  .caption-box {
+    position: absolute;
+    transform: translate(-50%, -50%);
+    pointer-events: auto;
+    cursor: move;
+    user-select: none;
+    padding: 4px 8px;
+    border: 2px dashed transparent;
+    text-align: center;
+    line-height: 1.2;
+    white-space: pre-wrap;
+  }
+  .caption-box:hover { border-color: rgba(74, 158, 255, 0.5); }
+  .caption-box.selected { border-color: var(--accent); }
+  .caption-box.editing { cursor: text; border-style: solid; }
+  .caption-box[contenteditable="true"] { outline: none; }
+  .shape-box {
+    position: absolute;
+    pointer-events: auto;
+    cursor: move;
+    border: 2px dashed transparent;
+  }
+  .shape-box:hover { border-color: rgba(74, 158, 255, 0.5); }
+  .shape-box.selected { border-color: var(--accent); }
+  .resize-handle {
+    position: absolute;
+    width: 10px;
+    height: 10px;
+    background: var(--accent);
+    border: 1px solid white;
+    pointer-events: auto;
+  }
+  .rh-tl { top: -5px; left: -5px; cursor: nwse-resize; }
+  .rh-tr { top: -5px; right: -5px; cursor: nesw-resize; }
+  .rh-bl { bottom: -5px; left: -5px; cursor: nesw-resize; }
+  .rh-br { bottom: -5px; right: -5px; cursor: nwse-resize; }
 
-body {
-  background: var(--bg);
-  color: var(--text-primary);
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  font-size: 13px;
-  height: 100vh;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
+  .drop-zone {
+    width: 80%;
+    max-width: 600px;
+    padding: 60px;
+    border: 2px dashed var(--border);
+    border-radius: 8px;
+    text-align: center;
+    color: var(--text-dim);
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .drop-zone.drag-over { border-color: var(--accent); background: rgba(74, 158, 255, 0.05); }
 
-/* Title bar */
-.titlebar {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 12px 18px;
-  background: var(--surface);
-  border-bottom: 1px solid var(--border);
-}
-.title { font-size: 14px; font-weight: 600; letter-spacing: 0.02em; }
-.title-sub { color: var(--text-dim); font-size: 11px; }
-.titlebar .spacer { flex: 1; }
+  .controls-bar {
+    background: var(--panel);
+    border-top: 1px solid var(--border);
+    padding: 8px 12px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  .controls-bar button {
+    background: var(--panel-2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    padding: 6px 14px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 12px;
+  }
+  .controls-bar button:hover:not(:disabled) { background: #3a3a3a; }
+  .controls-bar button:disabled { opacity: 0.4; cursor: not-allowed; }
+  .controls-bar button.primary {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: white;
+  }
+  .controls-bar button.primary:hover:not(:disabled) { background: var(--accent-hover); }
 
-.health-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 4px 9px;
-  border-radius: 20px;
-  background: var(--surface2);
-  font-size: 10px;
-  color: var(--text-secondary);
-}
-.health-pill .dot {
-  width: 6px; height: 6px; border-radius: 50%; background: var(--text-dim);
-}
-.health-pill.ok .dot { background: var(--success); }
-.health-pill.err .dot { background: var(--error); }
+  .progress-bar {
+    flex: 1;
+    height: 8px;
+    background: var(--panel-2);
+    border-radius: 4px;
+    overflow: hidden;
+    display: none;
+    min-width: 100px;
+  }
+  .progress-bar.visible { display: block; }
+  .progress-fill {
+    height: 100%;
+    background: var(--accent);
+    width: 0%;
+    transition: width 0.2s;
+  }
+  .progress-label { font-size: 11px; color: var(--text-dim); display: none; }
+  .progress-label.visible { display: inline; }
 
-/* Main split: left = preview/upload, right = controls */
-.main {
-  flex: 1;
-  display: flex;
-  overflow: hidden;
-}
+  /* TRANSCRIPT */
+  .transcript-area {
+    height: 180px;
+    background: var(--panel);
+    border-top: 1px solid var(--border);
+    padding: 8px 12px;
+    overflow-y: auto;
+    line-height: 1.6;
+  }
+  .transcript-area h3 {
+    margin: 0 0 8px 0;
+    font-size: 12px;
+    color: var(--text-dim);
+    font-weight: normal;
+  }
+  .transcript-word {
+    display: inline-block;
+    padding: 1px 3px;
+    margin: 1px;
+    cursor: pointer;
+    border-radius: 2px;
+  }
+  .transcript-word:hover { background: var(--panel-2); }
+  .transcript-word.active { background: var(--accent); color: white; }
+  .transcript-word.editing {
+    background: var(--panel-2);
+    outline: 1px solid var(--accent);
+    cursor: text;
+  }
 
-.left {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  background: var(--bg);
-  border-right: 1px solid var(--border);
-}
+  /* SIDEBAR */
+  .sidebar {
+    background: var(--panel);
+    border-left: 1px solid var(--border);
+    overflow-y: auto;
+    grid-row: 2;
+  }
+  .tab-bar {
+    display: flex;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg);
+  }
+  .tab {
+    flex: 1;
+    padding: 10px;
+    text-align: center;
+    cursor: pointer;
+    font-size: 12px;
+    color: var(--text-dim);
+    border-bottom: 2px solid transparent;
+  }
+  .tab.active {
+    color: var(--text);
+    border-bottom-color: var(--accent);
+  }
+  .tab-panel { display: none; padding: 12px; }
+  .tab-panel.active { display: block; }
 
-.right {
-  width: 340px;
-  display: flex;
-  flex-direction: column;
-  background: var(--surface);
-  overflow-y: auto;
-}
+  .field { margin-bottom: 12px; }
+  .field label {
+    display: block;
+    font-size: 11px;
+    color: var(--text-dim);
+    margin-bottom: 4px;
+  }
+  .field input[type="text"],
+  .field input[type="number"],
+  .field select {
+    width: 100%;
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 6px 8px;
+    font-size: 12px;
+  }
+  .field input[type="color"] {
+    width: 40px;
+    height: 28px;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    border-radius: 4px;
+    cursor: pointer;
+  }
+  .row { display: flex; gap: 8px; align-items: center; }
+  .row > .field { flex: 1; }
+  .checkbox-row { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
+  .checkbox-row input { margin: 0; }
+  .checkbox-row label { margin: 0; color: var(--text); font-size: 12px; }
 
-/* Drop zone */
-.drop-zone {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  padding: 40px;
-  border: 2px dashed var(--border-light);
-  margin: 20px;
-  border-radius: var(--radius);
-  cursor: pointer;
-  transition: background 0.15s, border-color 0.15s;
-}
-.drop-zone:hover, .drop-zone.dragover {
-  background: var(--surface);
-  border-color: var(--accent);
-}
-.drop-icon { font-size: 48px; opacity: 0.4; margin-bottom: 16px; }
-.drop-title { font-size: 18px; font-weight: 500; margin-bottom: 6px; }
-.drop-sub { color: var(--text-secondary); font-size: 12px; }
+  /* Shape list */
+  .shape-list {
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    max-height: 200px;
+    overflow-y: auto;
+    margin-bottom: 8px;
+  }
+  .shape-row {
+    padding: 6px 8px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+    font-size: 11px;
+  }
+  .shape-row:hover { background: var(--panel-2); }
+  .shape-row.selected { background: rgba(74, 158, 255, 0.15); }
+  .shape-row .swatch {
+    width: 12px; height: 12px;
+    border: 1px solid var(--border);
+    border-radius: 2px;
+  }
+  .shape-row .del {
+    margin-left: auto;
+    background: none;
+    border: none;
+    color: var(--danger);
+    cursor: pointer;
+    padding: 0 4px;
+  }
+  .btn-group { display: flex; gap: 4px; }
+  .btn-group button {
+    flex: 1;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 6px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 11px;
+  }
+  .btn-group button:hover { background: #3a3a3a; }
 
-/* Video preview */
-.video-section {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  padding: 20px;
-  gap: 12px;
-  min-height: 0;
-}
-.video-wrap {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: #000;
-  border-radius: var(--radius);
-  overflow: hidden;
-  position: relative;
-  min-height: 0;
-}
-/* The video-stage maintains aspect ratio of the video */
-.video-stage {
-  position: relative;
-  max-width: 100%;
-  max-height: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-video {
-  width: 100%;
-  height: 100%;
-  display: block;
-  object-fit: contain;
-}
+  /* Context menu */
+  .ctx-menu {
+    position: fixed;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 4px 0;
+    z-index: 1000;
+    min-width: 160px;
+    display: none;
+  }
+  .ctx-menu.visible { display: block; }
+  .ctx-item {
+    padding: 6px 12px;
+    cursor: pointer;
+    font-size: 12px;
+  }
+  .ctx-item:hover { background: var(--accent); color: white; }
+  .ctx-divider { height: 1px; background: var(--border); margin: 4px 0; }
 
-.video-info {
-  display: flex;
-  gap: 16px;
-  font-size: 11px;
-  color: var(--text-secondary);
-  padding: 0 4px;
-}
-.video-info span { display: inline-flex; align-items: center; gap: 4px; }
-.video-info .label { color: var(--text-dim); }
-
-.video-actions {
-  display: flex;
-  gap: 8px;
-}
-
-/* Right panel sections */
-.panel-section {
-  padding: 18px 18px;
-  border-bottom: 1px solid var(--border);
-}
-.panel-section:last-child { border-bottom: none; }
-.section-title {
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: var(--text-dim);
-  margin-bottom: 14px;
-}
-
-/* Form rows */
-.field-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 10px;
-}
-.field-row label {
-  font-size: 12px;
-  color: var(--text-secondary);
-  min-width: 78px;
-}
-.field-row .control {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-input[type="text"], input[type="number"] {
-  background: var(--surface2);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  color: var(--text-primary);
-  padding: 6px 10px;
-  font-size: 12px;
-  font-family: inherit;
-  width: 100%;
-  outline: none;
-}
-input[type="text"]:focus, input[type="number"]:focus {
-  border-color: var(--accent);
-}
-
-.color-swatch {
-  width: 28px;
-  height: 28px;
-  border-radius: 6px;
-  border: 1px solid var(--border-light);
-  cursor: pointer;
-  flex-shrink: 0;
-}
-.hex-input { font-family: monospace; width: 80px; flex: none; }
-
-input[type="checkbox"] {
-  width: 16px;
-  height: 16px;
-  accent-color: var(--accent);
-  cursor: pointer;
-}
-
-.toggle-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  cursor: pointer;
-  padding: 6px 0;
-}
-.toggle-row label { cursor: pointer; font-size: 12px; }
-
-/* Buttons */
-.btn {
-  background: var(--surface2);
-  border: 1px solid var(--border);
-  color: var(--text-primary);
-  padding: 8px 14px;
-  border-radius: 6px;
-  font-size: 12px;
-  cursor: pointer;
-  font-family: inherit;
-  transition: all 0.15s;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-.btn:hover { background: var(--border); border-color: var(--border-light); }
-.btn.primary {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: white;
-  font-weight: 500;
-}
-.btn.primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
-.btn:disabled { opacity: 0.45; cursor: not-allowed; }
-.btn.full { width: 100%; justify-content: center; padding: 10px; }
-.btn.large { padding: 12px 18px; font-size: 13px; }
-
-/* Progress */
-.progress-row {
-  margin-top: 14px;
-}
-.progress-label {
-  display: flex;
-  justify-content: space-between;
-  font-size: 11px;
-  color: var(--text-secondary);
-  margin-bottom: 6px;
-}
-.progress-bar {
-  height: 4px;
-  background: var(--surface2);
-  border-radius: 2px;
-  overflow: hidden;
-}
-.progress-fill {
-  height: 100%;
-  background: var(--accent);
-  width: 0%;
-  transition: width 0.3s ease;
-}
-
-/* Transcript view */
-.transcript-section {
-  max-height: 200px;
-  overflow-y: auto;
-  font-size: 12px;
-  line-height: 1.8;
-  padding: 10px;
-  background: var(--bg);
-  border-radius: 6px;
-  border: 1px solid var(--border);
-}
-.transcript-word {
-  color: var(--text-secondary);
-  cursor: pointer;
-  padding: 1px 2px;
-  border-radius: 3px;
-}
-.transcript-word.current {
-  background: var(--accent);
-  color: white;
-}
-.transcript-word:hover {
-  background: var(--surface2);
-  color: var(--text-primary);
-}
-
-.empty-transcript {
-  color: var(--text-dim);
-  font-style: italic;
-  font-size: 11px;
-  text-align: center;
-  padding: 18px;
-}
-
-/* Status bar */
-.status-bar {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 7px 18px;
-  background: var(--surface);
-  border-top: 1px solid var(--border);
-  font-size: 11px;
-  color: var(--text-secondary);
-}
-.status-bar .dot {
-  width: 7px; height: 7px; border-radius: 50%;
-  background: var(--text-dim);
-}
-.status-bar .dot.busy { background: var(--warning); animation: pulse 1s infinite; }
-.status-bar .dot.ok { background: var(--success); }
-.status-bar .dot.err { background: var(--error); }
-@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
-.status-text { flex: 1; }
-
-/* Caption preview overlay (on video) */
-.caption-overlay {
-  position: absolute;
-  left: 0;
-  right: 0;
-  top: 0;
-  bottom: 0;
-  pointer-events: none;
-  user-select: none;
-  overflow: hidden;
-}
-.caption-overlay .caption-line {
-  position: absolute;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  text-align: center;
-  white-space: nowrap;
-  font-weight: 700;
-  text-shadow: 0 2px 8px rgba(0,0,0,0.7);
-  line-height: 1.1;
-  letter-spacing: 0.5px;
-}
-.caption-overlay .word {
-  display: inline-block;
-  padding: 1px 4px;
-  margin: 0 1px;
-  border-radius: 4px;
-  transition: none;
-}
-
-/* Color picker - native */
-input[type="color"] {
-  border: none;
-  background: none;
-  padding: 0;
-  width: 28px;
-  height: 28px;
-  cursor: pointer;
-  border-radius: 6px;
-}
-input[type="color"]::-webkit-color-swatch-wrapper { padding: 0; }
-input[type="color"]::-webkit-color-swatch { border: 1px solid var(--border-light); border-radius: 6px; }
-
-/* Font dropdown */
-.font-dropdown {
-  position: absolute;
-  top: 100%;
-  left: 0;
-  right: 0;
-  margin-top: 4px;
-  background: var(--surface2);
-  border: 1px solid var(--border-light);
-  border-radius: 6px;
-  max-height: 240px;
-  overflow-y: auto;
-  z-index: 100;
-  box-shadow: 0 8px 24px rgba(0,0,0,0.5);
-}
-.font-option {
-  padding: 7px 12px;
-  font-size: 13px;
-  cursor: pointer;
-  border-bottom: 1px solid var(--border);
-}
-.font-option:last-child { border-bottom: none; }
-.font-option:hover, .font-option.highlighted {
-  background: var(--accent);
-  color: white;
-}
-.font-option .meta {
-  font-size: 10px;
-  color: var(--text-dim);
-  margin-left: 8px;
-}
-.font-option:hover .meta, .font-option.highlighted .meta {
-  color: rgba(255,255,255,0.7);
-}
-
-/* Hidden file input */
-input[type="file"] { display: none; }
+  /* Update toast */
+  .update-toast {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+    min-width: 280px;
+    max-width: 380px;
+    z-index: 100;
+    display: none;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+  }
+  .update-toast.visible { display: block; }
+  .update-toast h4 { margin: 0 0 6px 0; font-size: 13px; }
+  .update-toast p { margin: 0 0 10px 0; font-size: 12px; color: var(--text-dim); }
+  .update-toast .actions { display: flex; gap: 8px; }
+  .update-toast button {
+    flex: 1; padding: 6px 12px; border-radius: 4px;
+    border: 1px solid var(--border); background: var(--panel);
+    color: var(--text); cursor: pointer; font-size: 12px;
+  }
+  .update-toast button.primary { background: var(--accent); border-color: var(--accent); color: white; }
 </style>
 </head>
 <body>
 
-<div class="titlebar">
-  <span class="title">Caption Highlighter</span>
-  <span class="title-sub">v0.1</span>
-  <div class="spacer"></div>
-  <span class="health-pill" id="health-whisper"><span class="dot"></span><span id="health-whisper-text">whisper</span></span>
-  <span class="health-pill" id="health-model"><span class="dot"></span><span id="health-model-text">model</span></span>
-  <span class="health-pill" id="health-ffmpeg"><span class="dot"></span><span id="health-ffmpeg-text">ffmpeg</span></span>
-</div>
-
-<div class="main">
-
-  <div class="left">
-    <!-- Drop zone (shown until video loaded) -->
-    <div class="drop-zone" id="dropZone">
-      <div class="drop-icon">🎬</div>
-      <div class="drop-title">Drop a video here</div>
-      <div class="drop-sub">or click to browse — mp4, mov, mkv, webm</div>
-    </div>
-
-    <!-- Video preview (hidden until video loaded) -->
-    <div class="video-section" id="videoSection" style="display:none">
-      <div class="video-wrap">
-        <div class="video-stage" id="videoStage">
-          <video id="videoEl" controls></video>
-          <div class="caption-overlay" id="captionOverlay" style="display:none"></div>
-        </div>
-      </div>
-      <div class="video-info">
-        <span><span class="label">size:</span> <span id="vidDim">—</span></span>
-        <span><span class="label">duration:</span> <span id="vidDur">—</span></span>
-        <span><span class="label">fps:</span> <span id="vidFps">—</span></span>
-        <span><span class="label">words:</span> <span id="vidWords">—</span></span>
-        <span style="flex:1"></span>
-        <button class="btn" id="btnReplace">Replace</button>
-      </div>
+<div class="app">
+  <div class="header">
+    <h1>Caption Highlighter</h1>
+    <span class="version" id="versionLabel">v1.1.0</span>
+    <div class="header-right">
+      <span class="update-pill" id="updatePill">Update available — click to install</span>
+      <button id="checkUpdateBtn" style="background:var(--panel-2);color:var(--text);border:1px solid var(--border);padding:4px 10px;border-radius:4px;cursor:pointer;font-size:11px;">Check for updates</button>
     </div>
   </div>
 
-  <div class="right">
-
-    <div class="panel-section">
-      <div class="section-title">Step 1 — Transcribe</div>
-      <button class="btn primary full" id="btnTranscribe" disabled>Transcribe Audio</button>
-      <div class="progress-row" id="transcribeProgress" style="display:none">
-        <div class="progress-label">
-          <span id="transcribeStage">…</span>
-          <span id="transcribePct">0%</span>
-        </div>
-        <div class="progress-bar"><div class="progress-fill" id="transcribeFill"></div></div>
+  <div class="main">
+    <div class="video-area">
+      <div class="drop-zone" id="dropZone">
+        <div style="font-size:32px;margin-bottom:8px;">📹</div>
+        <div>Drop a video here, or click to browse</div>
       </div>
-      <div class="transcript-section" id="transcriptView" style="display:none; margin-top: 12px;"></div>
-    </div>
-
-    <div class="panel-section">
-      <div class="section-title">Step 2 — Style</div>
-
-      <div class="field-row">
-        <label>Font</label>
-        <div class="control" style="position:relative">
-          <input type="text" id="fontInput" value="Arial Black" autocomplete="off" placeholder="Type to search…">
-          <div class="font-dropdown" id="fontDropdown" style="display:none"></div>
-        </div>
-      </div>
-      <div class="field-row">
-        <label>Size (px)</label>
-        <div class="control">
-          <input type="number" id="sizeInput" value="64" min="16" max="200">
-        </div>
-      </div>
-      <div class="field-row">
-        <label>Bold</label>
-        <div class="control">
-          <input type="checkbox" id="boldInput" checked>
-        </div>
-      </div>
-
-      <div class="field-row">
-        <label>Base color</label>
-        <div class="control">
-          <input type="color" id="baseColor" value="#ffffff">
-          <input type="text" id="baseHex" class="hex-input" value="#FFFFFF">
-        </div>
-      </div>
-
-      <div class="field-row">
-        <label>Highlight</label>
-        <div class="control">
-          <input type="color" id="hlColor" value="#ffd700">
-          <input type="text" id="hlHex" class="hex-input" value="#FFD700">
-        </div>
-      </div>
-
-      <div class="toggle-row">
-        <input type="checkbox" id="bgEnabled">
-        <label for="bgEnabled">Background box behind highlighted word</label>
-      </div>
-
-      <div class="field-row" id="bgColorRow" style="display:none">
-        <label>Box color</label>
-        <div class="control">
-          <input type="color" id="bgColor" value="#000000">
-          <input type="text" id="bgHex" class="hex-input" value="#000000">
-        </div>
-      </div>
-
-      <div class="field-row">
-        <label>Y position</label>
-        <div class="control">
-          <input type="number" id="yPos" value="85" min="0" max="100">
-          <span style="font-size:11px; color: var(--text-dim);">% from top</span>
-        </div>
+      <div class="video-wrap" id="videoWrap" style="display:none;">
+        <video id="videoEl" controls></video>
+        <div class="overlay" id="overlay"></div>
       </div>
     </div>
 
-    <div class="panel-section">
-      <div class="section-title">Step 3 — Export</div>
-      <button class="btn primary full large" id="btnExport" disabled>Export Video</button>
-      <div class="progress-row" id="exportProgress" style="display:none">
-        <div class="progress-label">
-          <span id="exportStage">…</span>
-          <span id="exportPct">0%</span>
-        </div>
-        <div class="progress-bar"><div class="progress-fill" id="exportFill"></div></div>
-      </div>
-      <div style="display:flex; gap:8px; margin-top:10px;">
-        <button class="btn" id="btnOpenInAME" disabled style="flex:1">Send to Media Encoder</button>
-        <button class="btn" id="btnRevealOutput" disabled style="flex:1">Show in Folder</button>
-      </div>
+    <div class="controls-bar">
+      <button id="transcribeBtn" disabled>Transcribe Audio</button>
+      <button id="exportBtn" disabled>Export Video</button>
+      <button id="mediaEncoderBtn" disabled>Send to Media Encoder</button>
+      <button id="fullscreenBtn" disabled>Fullscreen Preview</button>
+      <button id="showFolderBtn" disabled>Show in Folder</button>
+      <button id="openVideoBtn" disabled>Open Output</button>
+      <div class="progress-bar" id="progressBar"><div class="progress-fill" id="progressFill"></div></div>
+      <span class="progress-label" id="progressLabel">0%</span>
+      <span id="statusLabel" style="font-size:11px;color:var(--text-dim);margin-left:auto;"></span>
     </div>
 
+    <div class="transcript-area" id="transcriptArea" style="display:none;">
+      <h3>Transcript <span style="float:right;font-size:10px;">click to seek · double-click to edit · right-click for menu</span></h3>
+      <div id="transcriptWords"></div>
+    </div>
   </div>
 
+  <div class="sidebar">
+    <div class="tab-bar">
+      <div class="tab active" data-tab="captions">Captions</div>
+      <div class="tab" data-tab="shapes">Shapes</div>
+      <div class="tab" data-tab="output">Output</div>
+      <div class="tab" data-tab="diag">Diagnostics</div>
+    </div>
+
+    <div class="tab-panel active" data-panel="captions">
+      <div class="field">
+        <label>Font <span id="fontSource" style="float:right;color:var(--text-dim);"></span></label>
+        <div class="row">
+          <select id="fontSelect" style="flex:1;"><option>Arial</option></select>
+          <button id="rescanFontsBtn" style="background:var(--panel-2);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:6px 10px;cursor:pointer;font-size:11px;white-space:nowrap;">Rescan</button>
+        </div>
+      </div>
+      <div class="row">
+        <div class="field">
+          <label>Size</label>
+          <input type="number" id="fontSize" value="48" min="10" max="200">
+        </div>
+        <div class="field">
+          <label>Max width (% of video)</label>
+          <input type="number" id="maxWidth" value="80" min="20" max="100">
+        </div>
+      </div>
+      <div class="row">
+        <div class="field">
+          <label>Base color</label>
+          <input type="color" id="baseColor" value="#FFFFFF">
+        </div>
+        <div class="field">
+          <label>Highlight color</label>
+          <input type="color" id="highlightColor" value="#FFFF00">
+        </div>
+        <div class="field">
+          <label>Outline color</label>
+          <input type="color" id="outlineColor" value="#000000">
+        </div>
+      </div>
+      <div class="checkbox-row">
+        <input type="checkbox" id="boldCheck">
+        <label for="boldCheck">Bold</label>
+        <input type="checkbox" id="italicCheck" style="margin-left:12px;">
+        <label for="italicCheck">Italic</label>
+      </div>
+      <div class="checkbox-row">
+        <input type="checkbox" id="highlightBoxCheck">
+        <label for="highlightBoxCheck">Background box behind active word</label>
+      </div>
+      <div class="field" id="boxColorField" style="display:none;">
+        <label>Highlight box color</label>
+        <input type="color" id="highlightBoxColor" value="#FF0000">
+      </div>
+      <div class="field">
+        <label>Words per caption (target)</label>
+        <input type="number" id="wordsPerCap" value="6" min="1" max="20">
+      </div>
+      <div class="field">
+        <label>Lines per caption (max)</label>
+        <input type="number" id="linesPerCap" value="2" min="1" max="4">
+      </div>
+      <p style="font-size:11px;color:var(--text-dim);margin-top:12px;">
+        💡 Drag captions on the video to reposition. Double-click to edit text directly.
+      </p>
+    </div>
+
+    <div class="tab-panel" data-panel="shapes">
+      <div class="btn-group">
+        <button onclick="addShape('rect')">+ Rectangle</button>
+        <button onclick="addShape('circle')">+ Circle</button>
+        <button onclick="addShape('line')">+ Line</button>
+      </div>
+      <p style="font-size:11px;color:var(--text-dim);margin:8px 0;">
+        ⚠️ Circles render as filled squares in the exported video (ffmpeg limitation).
+      </p>
+      <div class="shape-list" id="shapeList"></div>
+      <div id="shapeProps" style="display:none;">
+        <div class="row">
+          <div class="field">
+            <label>Color</label>
+            <input type="color" id="shapeColor">
+          </div>
+          <div class="field">
+            <label>Opacity</label>
+            <input type="number" id="shapeOpacity" min="0" max="1" step="0.1" value="1">
+          </div>
+        </div>
+        <div class="checkbox-row">
+          <input type="checkbox" id="shapeFilled" checked>
+          <label for="shapeFilled">Filled</label>
+        </div>
+        <div class="row">
+          <div class="field">
+            <label>Start (sec)</label>
+            <input type="number" id="shapeStart" min="0" step="0.1" value="0">
+          </div>
+          <div class="field">
+            <label>End (sec)</label>
+            <input type="number" id="shapeEnd" min="0" step="0.1" value="5">
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="tab-panel" data-panel="output">
+      <p style="font-size:12px;color:var(--text-dim);">
+        Exported video will be a new MP4 with captions and shapes baked into the frames.
+      </p>
+      <div class="field">
+        <label>Output path</label>
+        <input type="text" id="outputPath" readonly placeholder="(choose when exporting)">
+      </div>
+    </div>
+
+    <div class="tab-panel" data-panel="diag">
+      <div class="field">
+        <label>Transcription mode</label>
+        <select id="gpuMode">
+          <option value="auto">Auto (try GPU, fall back to CPU)</option>
+          <option value="gpu">Force GPU (CUDA) — fail if unavailable</option>
+          <option value="cpu">Force CPU</option>
+        </select>
+      </div>
+      <div style="background:var(--bg);border:1px solid var(--border);border-radius:4px;padding:10px;margin-bottom:10px;">
+        <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px;">
+          <span style="color:var(--text-dim);">Backend</span>
+          <span id="diagBackend" style="font-weight:bold;">—</span>
+        </div>
+        <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px;">
+          <span style="color:var(--text-dim);">GPU device</span>
+          <span id="diagDevice">—</span>
+        </div>
+        <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px;">
+          <span style="color:var(--text-dim);">Total time</span>
+          <span id="diagTime">—</span>
+        </div>
+        <div style="display:flex;justify-content:space-between;font-size:12px;">
+          <span style="color:var(--text-dim);">Speed (× realtime)</span>
+          <span id="diagSpeed">—</span>
+        </div>
+      </div>
+      <label style="font-size:11px;color:var(--text-dim);">whisper log</label>
+      <pre id="whisperLog" style="background:#0d0d0d;border:1px solid var(--border);border-radius:4px;padding:8px;font-size:10px;height:240px;overflow-y:auto;margin:4px 0 0 0;white-space:pre-wrap;color:#9fd49f;"></pre>
+    </div>
+  </div>
 </div>
 
-<div class="status-bar">
-  <div class="dot" id="statusDot"></div>
-  <span class="status-text" id="statusText">Ready</span>
-</div>
+<div class="ctx-menu" id="ctxMenu"></div>
 
-<input type="file" id="fileInput" accept="video/*">
+<div class="update-toast" id="updateToast">
+  <h4 id="updateTitle">Update available</h4>
+  <p id="updateMsg"></p>
+  <div class="actions">
+    <button id="updateLater">Later</button>
+    <button class="primary" id="updateNow">Download & Install</button>
+  </div>
+</div>
 
 <script>
-// ─── STATE ──────────────────────────────────────────────────────────────
-let videoPath = null;
-let videoMeta = null;
-let words = [];           // {text, start, end}[]
-let captionGroups = [];   // grouped into captions for display
+// ─── STATE ────────────────────────────────────────────────────────────────
+const state = {
+  videoPath: null,
+  videoSize: { width: 1920, height: 1080 },
+  words: [],           // {text, start, end}
+  captions: [],        // {id, words:[{text,start,end}], lines:[[wIdx,...]], x, y, start, end}
+  shapes: [],          // {id, type, x, y, w, h, color, opacity, filled, stroke, start, end}
+  selectedCaption: null,
+  selectedShape: null,
+  lastOutputPath: null,
+};
 
 const $ = (id) => document.getElementById(id);
 
-// ─── HEALTH CHECK ───────────────────────────────────────────────────────
-(async () => {
-  const h = await window.api.checkBinaries();
-  $('health-whisper').classList.toggle('ok', h.whisper);
-  $('health-whisper').classList.toggle('err', !h.whisper);
-  $('health-whisper-text').textContent = h.whisper ? 'whisper ✓' : 'whisper missing';
-
-  $('health-model').classList.toggle('ok', h.model);
-  $('health-model').classList.toggle('err', !h.model);
-  $('health-model-text').textContent = h.model ? 'model ✓' : 'model missing';
-
-  $('health-ffmpeg').classList.toggle('ok', h.ffmpeg);
-  $('health-ffmpeg').classList.toggle('err', !h.ffmpeg);
-  $('health-ffmpeg-text').textContent = h.ffmpeg ? 'ffmpeg ✓' : 'ffmpeg missing';
-
-  if (!h.whisper || !h.model || !h.ffmpeg) {
-    setStatus('err', 'Missing files in bin/ folder — see README');
-  } else {
-    setStatus('ok', 'All systems ready');
-  }
-})();
-
-// ─── LOAD FONTS ─────────────────────────────────────────────────────────
-let installedFonts = [];
-(async () => {
-  try {
-    installedFonts = await window.api.listFonts();
-    console.log(`Loaded ${installedFonts.length} fonts from system`);
-  } catch(e) {
-    console.warn('Font enumeration failed:', e);
-    installedFonts = [];
-  }
-})();
-
-// Font dropdown logic
-const fontInput = $('fontInput');
-const fontDropdown = $('fontDropdown');
-let highlightedFontIdx = -1;
-
-function showFontDropdown(filter) {
-  if (!installedFonts.length) {
-    fontDropdown.style.display = 'none';
-    return;
-  }
-  const f = (filter || '').toLowerCase().trim();
-  const matches = f
-    ? installedFonts.filter(name => name.toLowerCase().includes(f)).slice(0, 50)
-    : installedFonts.slice(0, 50);
-
-  if (!matches.length) {
-    fontDropdown.style.display = 'none';
-    return;
-  }
-
-  fontDropdown.innerHTML = '';
-  matches.forEach((name, i) => {
-    const opt = document.createElement('div');
-    opt.className = 'font-option';
-    opt.style.fontFamily = `"${name}", sans-serif`;
-    opt.textContent = name;
-    if (i === highlightedFontIdx) opt.classList.add('highlighted');
-    opt.addEventListener('mousedown', (e) => {
-      e.preventDefault(); // prevent input blur before click
-      fontInput.value = name;
-      fontDropdown.style.display = 'none';
-      updatePreview();
-    });
-    fontDropdown.appendChild(opt);
-  });
-  fontDropdown.style.display = 'block';
-}
-
-fontInput.addEventListener('focus', () => showFontDropdown(fontInput.value));
-fontInput.addEventListener('input', () => {
-  highlightedFontIdx = -1;
-  showFontDropdown(fontInput.value);
-  updatePreview();
-});
-fontInput.addEventListener('blur', () => {
-  // Small delay so click on option fires first
-  setTimeout(() => { fontDropdown.style.display = 'none'; }, 150);
-});
-fontInput.addEventListener('keydown', (e) => {
-  const opts = fontDropdown.querySelectorAll('.font-option');
-  if (!opts.length || fontDropdown.style.display === 'none') return;
-
-  if (e.key === 'ArrowDown') {
-    e.preventDefault();
-    highlightedFontIdx = Math.min(opts.length - 1, highlightedFontIdx + 1);
-    opts.forEach((o, i) => o.classList.toggle('highlighted', i === highlightedFontIdx));
-    opts[highlightedFontIdx].scrollIntoView({ block: 'nearest' });
-  } else if (e.key === 'ArrowUp') {
-    e.preventDefault();
-    highlightedFontIdx = Math.max(0, highlightedFontIdx - 1);
-    opts.forEach((o, i) => o.classList.toggle('highlighted', i === highlightedFontIdx));
-    opts[highlightedFontIdx].scrollIntoView({ block: 'nearest' });
-  } else if (e.key === 'Enter' && highlightedFontIdx >= 0) {
-    e.preventDefault();
-    fontInput.value = opts[highlightedFontIdx].textContent;
-    fontDropdown.style.display = 'none';
-    updatePreview();
-  } else if (e.key === 'Escape') {
-    fontDropdown.style.display = 'none';
-  }
-});
-
-
-// ─── DROP ZONE ──────────────────────────────────────────────────────────
+// ─── DROP / PICK ─────────────────────────────────────────────────────────
 const dropZone = $('dropZone');
-dropZone.addEventListener('click', () => {
-  window.api.pickVideo().then(path => path && loadVideo(path));
+dropZone.addEventListener('click', async () => {
+  const p = await window.api.pickVideo();
+  if (p) loadVideo(p);
 });
 dropZone.addEventListener('dragover', (e) => {
   e.preventDefault();
-  dropZone.classList.add('dragover');
+  dropZone.classList.add('drag-over');
 });
-dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
 dropZone.addEventListener('drop', (e) => {
   e.preventDefault();
-  dropZone.classList.remove('dragover');
+  dropZone.classList.remove('drag-over');
   const f = e.dataTransfer.files[0];
-  if (f && f.path) loadVideo(f.path);
+  if (f) loadVideo(f.path);
 });
 
-$('btnReplace').addEventListener('click', () => {
-  window.api.pickVideo().then(path => path && loadVideo(path));
-});
-
-// ─── LOAD VIDEO ─────────────────────────────────────────────────────────
-async function loadVideo(path) {
-  videoPath = path;
+async function loadVideo(p) {
+  state.videoPath = p;
+  const info = await window.api.probeVideo(p);
+  state.videoSize = { width: info.width, height: info.height };
+  const vid = $('videoEl');
+  vid.src = 'file://' + p;
+  $('videoWrap').style.display = 'block';
   $('dropZone').style.display = 'none';
-  $('videoSection').style.display = 'flex';
-  $('videoEl').src = 'file:///' + path.replace(/\\/g, '/');
-
-  setStatus('busy', 'Probing video…');
-  try {
-    videoMeta = await window.api.probeVideo(path);
-    $('vidDim').textContent = `${videoMeta.width}×${videoMeta.height}`;
-    $('vidDur').textContent = formatTime(videoMeta.duration);
-    $('vidFps').textContent = videoMeta.fps.toFixed(2);
-    setStatus('ok', 'Video loaded');
-    $('btnTranscribe').disabled = false;
-    // Trigger resize once we know the dimensions
-    setTimeout(resizeVideoStage, 50);
-  } catch(e) {
-    setStatus('err', 'Probe failed: ' + e.message);
-  }
+  $('transcribeBtn').disabled = false;
+  $('fullscreenBtn').disabled = false;
+  setStatus(`Loaded ${p.split(/[\\/]/).pop()} (${info.width}×${info.height})`);
 }
 
-// ─── TRANSCRIBE ─────────────────────────────────────────────────────────
-$('btnTranscribe').addEventListener('click', async () => {
-  $('btnTranscribe').disabled = true;
-  $('transcribeProgress').style.display = 'block';
-  setStatus('busy', 'Transcribing audio with Whisper…');
+// ─── TRANSCRIBE ──────────────────────────────────────────────────────────
+$('transcribeBtn').addEventListener('click', async () => {
+  $('transcribeBtn').disabled = true;
+  $('progressBar').classList.add('visible');
+  $('progressLabel').classList.add('visible');
+  setStatus('Transcribing… (first run may take a while)');
+
   try {
-    const res = await window.api.transcribe(videoPath);
-    words = res.words;
-    captionGroups = groupWords(words);
+    const forceMode = $('gpuMode').value;
+    $('whisperLog').textContent = '';
+    const result = await window.api.transcribe(state.videoPath, { forceMode });
+    state.words = result.words;
+    state.captions = groupWordsIntoCaptions(state.words);
     renderTranscript();
-    $('vidWords').textContent = words.length;
-    $('btnExport').disabled = false;
-    setStatus('ok', `Transcribed ${words.length} words`);
-  } catch(e) {
-    setStatus('err', 'Transcription failed: ' + e.message);
-    $('btnTranscribe').disabled = false;
+    renderOverlay();
+    $('exportBtn').disabled = false;
+    $('mediaEncoderBtn').disabled = false;
+    // Update diagnostics
+    if (result.diag) {
+      const d = result.diag;
+      $('diagBackend').textContent = d.backend;
+      $('diagBackend').style.color = d.backend === 'CUDA' ? 'var(--success)' : 'var(--text)';
+      $('diagDevice').textContent = d.gpuDevice || '(none)';
+      $('diagTime').textContent = (d.elapsedMs / 1000).toFixed(1) + 's';
+      const vidDur = $('videoEl').duration || 0;
+      if (vidDur && d.elapsedMs) {
+        $('diagSpeed').textContent = (vidDur / (d.elapsedMs / 1000)).toFixed(1) + '×';
+      }
+    }
+    setStatus(result.gpuUsed ? '✓ Transcribed (GPU/CUDA)' : '✓ Transcribed (CPU)');
+  } catch (e) {
+    alert('Transcription failed:\n' + e.message);
+    setStatus('✗ Transcription failed');
+  } finally {
+    $('transcribeBtn').disabled = false;
+    $('progressBar').classList.remove('visible');
+    $('progressLabel').classList.remove('visible');
+    setProgress(0);
   }
 });
 
-window.api.onProgress((data) => {
-  $('transcribeStage').textContent = data.stage;
-  $('transcribePct').textContent = data.percent + '%';
-  $('transcribeFill').style.width = data.percent + '%';
+window.api.onTranscribeProgress((pct) => {
+  setProgress(pct);
+  $('progressLabel').textContent = pct + '%';
 });
 
-// ─── GROUP WORDS INTO CAPTIONS ──────────────────────────────────────────
-// Combine into ~6-word chunks at natural breaks, max 3s per group
-function groupWords(words) {
-  const groups = [];
-  let current = [];
-  let chunkStart = words[0]?.start ?? 0;
+window.api.onTranscribeGpuFallback((msg) => {
+  setStatus('GPU failed, using CPU: ' + msg.slice(0, 60));
+});
 
+window.api.onTranscribeDebug((msg) => {
+  const log = $('whisperLog');
+  log.textContent += msg + '\n';
+  log.scrollTop = log.scrollHeight;
+});
+
+// ─── GROUP WORDS INTO CAPTIONS ───────────────────────────────────────────
+function groupWordsIntoCaptions(words) {
+  const target = parseInt($('wordsPerCap').value, 10) || 6;
+  const maxLines = parseInt($('linesPerCap').value, 10) || 2;
+  const W = state.videoSize.width;
+  const H = state.videoSize.height;
+
+  const captions = [];
+  let cur = [];
+  let curStart = 0;
   for (let i = 0; i < words.length; i++) {
-    current.push(words[i]);
-    const chunkDur = words[i].end - chunkStart;
-    const isBreakWord = /[.!?,]$/.test(words[i].text);
-    const tooLong = current.length >= 6 || chunkDur >= 3;
-    if (isBreakWord || tooLong || i === words.length - 1) {
-      groups.push({
-        start: current[0].start,
-        end: current[current.length - 1].end,
-        words: current.slice()
+    if (cur.length === 0) curStart = words[i].start;
+    cur.push(words[i]);
+    const last = words[i].text;
+    const punct = /[.!?,;:]$/.test(last);
+    const tooLong = cur.length >= target && (punct || cur.length >= target + 2);
+    const tooFar = words[i].end - curStart > 3.0;
+    if (tooLong || tooFar || i === words.length - 1) {
+      // Wrap into lines
+      const lines = wrapIntoLines(cur, maxLines);
+      captions.push({
+        id: 'cap_' + captions.length,
+        words: cur.slice(),
+        lines,
+        x: W / 2,
+        y: H - 100,
+        start: cur[0].start,
+        end: cur[cur.length - 1].end,
       });
-      current = [];
-      chunkStart = words[i+1]?.start ?? 0;
+      cur = [];
     }
   }
-  return groups;
+  return captions;
 }
 
-// ─── RENDER TRANSCRIPT VIEW ─────────────────────────────────────────────
+function wrapIntoLines(words, maxLines) {
+  // Distribute words evenly across maxLines
+  if (maxLines === 1) return [words.map((_, i) => i)];
+  const perLine = Math.ceil(words.length / maxLines);
+  const lines = [];
+  for (let i = 0; i < words.length; i += perLine) {
+    lines.push(words.slice(i, i + perLine).map((_, j) => i + j));
+  }
+  return lines;
+}
+
+// ─── RENDER TRANSCRIPT ───────────────────────────────────────────────────
 function renderTranscript() {
-  const v = $('transcriptView');
-  v.style.display = 'block';
-  v.innerHTML = '';
-  words.forEach((w, i) => {
+  const area = $('transcriptArea');
+  area.style.display = 'block';
+  const wrap = $('transcriptWords');
+  wrap.innerHTML = '';
+  state.words.forEach((w, i) => {
     const span = document.createElement('span');
     span.className = 'transcript-word';
-    span.dataset.index = String(i);
-    span.dataset.start = String(w.start);
+    span.dataset.index = i;
     span.textContent = w.text;
     span.addEventListener('click', () => {
       $('videoEl').currentTime = w.start;
       $('videoEl').play();
     });
-    v.appendChild(span);
-    v.appendChild(document.createTextNode(' '));
+    span.addEventListener('dblclick', () => beginEditWord(span, i));
+    span.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      showWordCtxMenu(e.clientX, e.clientY, i);
+    });
+    wrap.appendChild(span);
+    wrap.appendChild(document.createTextNode(' '));
   });
 }
 
-// ─── LIVE PREVIEW OVERLAY ───────────────────────────────────────────────
-const videoEl = $('videoEl');
-const videoStage = $('videoStage');
-const overlay = $('captionOverlay');
-let lastWordIdx = -1;
-let lastGroupRef = null;
-
-// Use requestAnimationFrame for smooth preview updates while playing
-let rafId = null;
-function startPreviewLoop() {
-  cancelAnimationFrame(rafId);
-  function tick() {
-    updatePreview();
-    rafId = requestAnimationFrame(tick);
-  }
-  tick();
-}
-function stopPreviewLoop() {
-  cancelAnimationFrame(rafId);
-  rafId = null;
-}
-
-videoEl.addEventListener('play', startPreviewLoop);
-videoEl.addEventListener('pause', () => {
-  stopPreviewLoop();
-  updatePreview(); // one final update so the paused frame shows correct word
-});
-videoEl.addEventListener('seeked', updatePreview);
-videoEl.addEventListener('loadedmetadata', () => {
-  resizeVideoStage();
-  updatePreview();
-});
-videoEl.addEventListener('timeupdate', updatePreview);
-
-// Resize the video-stage to maintain aspect ratio inside the video-wrap
-window.addEventListener('resize', resizeVideoStage);
-
-function resizeVideoStage() {
-  if (!videoMeta) return;
-  const wrap = videoStage.parentElement;
-  const wrapW = wrap.clientWidth;
-  const wrapH = wrap.clientHeight;
-  const videoAR = videoMeta.width / videoMeta.height;
-  const wrapAR = wrapW / wrapH;
-
-  let stageW, stageH;
-  if (videoAR > wrapAR) {
-    // video wider than wrap → letterbox top/bottom
-    stageW = wrapW;
-    stageH = wrapW / videoAR;
-  } else {
-    // video taller → letterbox left/right
-    stageH = wrapH;
-    stageW = wrapH * videoAR;
-  }
-  videoStage.style.width = stageW + 'px';
-  videoStage.style.height = stageH + 'px';
-}
-
-function updatePreview() {
-  if (!captionGroups.length || !videoMeta) {
-    overlay.style.display = 'none';
-    return;
-  }
-  const t = videoEl.currentTime;
-
-  // Find active caption group
-  let activeGroup = null;
-  for (const g of captionGroups) {
-    if (t >= g.start && t <= g.end) { activeGroup = g; break; }
-  }
-
-  if (!activeGroup) {
-    overlay.style.display = 'none';
-    // Clear transcript-view highlighting
-    document.querySelectorAll('.transcript-word.current').forEach(el => el.classList.remove('current'));
-    lastWordIdx = -1;
-    lastGroupRef = null;
-    return;
-  }
-
-  // Find active word within group
-  let activeWordIdx = -1;
-  for (let i = 0; i < activeGroup.words.length; i++) {
-    if (t >= activeGroup.words[i].start && t <= activeGroup.words[i].end) {
-      activeWordIdx = i;
-      break;
+function beginEditWord(span, idx) {
+  span.contentEditable = 'true';
+  span.classList.add('editing');
+  span.focus();
+  document.execCommand('selectAll', false, null);
+  const finish = () => {
+    span.contentEditable = 'false';
+    span.classList.remove('editing');
+    state.words[idx].text = span.textContent.trim();
+    // Rebuild captions to pick up the edit
+    state.captions = groupWordsIntoCaptions(state.words);
+    renderOverlay();
+  };
+  span.addEventListener('blur', finish, { once: true });
+  span.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); span.blur(); }
+    if (e.key === 'Tab') {
+      e.preventDefault();
+      span.blur();
+      const next = $('transcriptWords').querySelector(`[data-index="${idx + 1}"]`);
+      if (next) beginEditWord(next, idx + 1);
     }
-  }
+  });
+}
 
-  // Only re-render if group or word changed (perf)
-  if (activeGroup === lastGroupRef && activeWordIdx === lastWordIdx) return;
-  lastGroupRef = activeGroup;
-  lastWordIdx = activeWordIdx;
-
-  // Render overlay
-  overlay.style.display = 'block';
-
-  const style = getStyle();
-
-  // Caption line element
-  overlay.innerHTML = '';
-  const line = document.createElement('div');
-  line.className = 'caption-line';
-
-  // Scale font size to the displayed video size (not the source resolution)
-  const scale = videoStage.clientHeight / videoMeta.height;
-  const displaySize = Math.max(8, style.fontSize * scale);
-  line.style.fontFamily = `"${style.font}", sans-serif`;
-  line.style.fontSize = displaySize + 'px';
-  line.style.fontWeight = style.bold ? '900' : '400';
-  line.style.left = '50%';
-  line.style.top = style.yPercent + '%';
-
-  activeGroup.words.forEach((w, i) => {
-    const span = document.createElement('span');
-    span.className = 'word';
-    span.textContent = w.text;
-    if (i === activeWordIdx) {
-      span.style.color = style.hlColor;
-      if (style.useBg) {
-        span.style.background = style.bgColor;
-      }
+function showWordCtxMenu(x, y, idx) {
+  const menu = $('ctxMenu');
+  menu.innerHTML = '';
+  const items = [
+    { label: 'Edit', fn: () => beginEditWord($('transcriptWords').querySelector(`[data-index="${idx}"]`), idx) },
+    { label: 'Delete', fn: () => { state.words.splice(idx, 1); state.captions = groupWordsIntoCaptions(state.words); renderTranscript(); renderOverlay(); } },
+    null,
+    { label: 'Insert before', fn: () => insertWordAt(idx, 'before') },
+    { label: 'Insert after', fn: () => insertWordAt(idx, 'after') },
+    null,
+    { label: 'Merge with next', fn: () => mergeWords(idx) },
+    { label: 'Split (by space)', fn: () => splitWord(idx) },
+  ];
+  for (const it of items) {
+    if (it === null) {
+      const d = document.createElement('div');
+      d.className = 'ctx-divider';
+      menu.appendChild(d);
     } else {
-      span.style.color = style.baseColor;
-    }
-    line.appendChild(span);
-  });
-
-  overlay.appendChild(line);
-
-  // Highlight in transcript view too
-  document.querySelectorAll('.transcript-word.current').forEach(el => el.classList.remove('current'));
-  if (activeWordIdx >= 0) {
-    const activeWordObj = activeGroup.words[activeWordIdx];
-    const globalIdx = words.indexOf(activeWordObj);
-    if (globalIdx >= 0) {
-      const el = document.querySelector(`.transcript-word[data-index="${globalIdx}"]`);
-      if (el) {
-        el.classList.add('current');
-        el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-      }
+      const el = document.createElement('div');
+      el.className = 'ctx-item';
+      el.textContent = it.label;
+      el.addEventListener('click', () => { it.fn(); hideCtxMenu(); });
+      menu.appendChild(el);
     }
   }
+  menu.style.left = x + 'px';
+  menu.style.top = y + 'px';
+  menu.classList.add('visible');
 }
 
-// ─── COLOR PICKERS SYNC ────────────────────────────────────────────────
-function syncColorPicker(colorId, hexId) {
-  const c = $(colorId), h = $(hexId);
-  c.addEventListener('input', () => { h.value = c.value.toUpperCase(); updatePreview(); });
-  h.addEventListener('change', () => {
-    if (/^#?[0-9a-fA-F]{6}$/.test(h.value)) {
-      const hex = h.value.startsWith('#') ? h.value : '#' + h.value;
-      c.value = hex.toLowerCase();
-      h.value = hex.toUpperCase();
-      updatePreview();
-    }
+function hideCtxMenu() { $('ctxMenu').classList.remove('visible'); }
+document.addEventListener('click', (e) => {
+  if (!e.target.closest('.ctx-menu')) hideCtxMenu();
+});
+
+function insertWordAt(idx, where) {
+  const ref = state.words[idx];
+  const w = { text: 'new', start: ref.start, end: ref.end };
+  state.words.splice(where === 'before' ? idx : idx + 1, 0, w);
+  state.captions = groupWordsIntoCaptions(state.words);
+  renderTranscript();
+  renderOverlay();
+}
+
+function mergeWords(idx) {
+  if (idx >= state.words.length - 1) return;
+  const a = state.words[idx], b = state.words[idx + 1];
+  state.words[idx] = { text: a.text + b.text, start: a.start, end: b.end };
+  state.words.splice(idx + 1, 1);
+  state.captions = groupWordsIntoCaptions(state.words);
+  renderTranscript();
+  renderOverlay();
+}
+
+function splitWord(idx) {
+  const w = state.words[idx];
+  const parts = w.text.split(/\s+/).filter(Boolean);
+  if (parts.length < 2) return;
+  const dur = (w.end - w.start) / parts.length;
+  const newWords = parts.map((t, i) => ({ text: t, start: w.start + dur * i, end: w.start + dur * (i + 1) }));
+  state.words.splice(idx, 1, ...newWords);
+  state.captions = groupWordsIntoCaptions(state.words);
+  renderTranscript();
+  renderOverlay();
+}
+
+// ─── OVERLAY (captions + shapes on video) ────────────────────────────────
+function renderOverlay() {
+  const overlay = $('overlay');
+  overlay.classList.add('editing');
+  overlay.innerHTML = '';
+  const video = $('videoEl');
+  if (!video.videoWidth) {
+    // Not loaded yet — try later
+    setTimeout(renderOverlay, 200);
+    return;
+  }
+  const rect = video.getBoundingClientRect();
+  const scaleX = rect.width / state.videoSize.width;
+  const scaleY = rect.height / state.videoSize.height;
+
+  // Captions: only render the one for current time, but show all in edit mode
+  const t = video.currentTime;
+  state.captions.forEach((cap) => {
+    if (t < cap.start || t > cap.end) return;
+    renderCaptionBox(cap, scaleX, scaleY);
+  });
+
+  // Shapes
+  state.shapes.forEach((s) => {
+    if (t < s.start || t > s.end) return;
+    renderShapeBox(s, scaleX, scaleY);
   });
 }
-syncColorPicker('baseColor', 'baseHex');
-syncColorPicker('hlColor', 'hlHex');
-syncColorPicker('bgColor', 'bgHex');
 
-$('bgEnabled').addEventListener('change', (e) => {
-  $('bgColorRow').style.display = e.target.checked ? 'flex' : 'none';
-  updatePreview();
+function renderCaptionBox(cap, scaleX, scaleY) {
+  const overlay = $('overlay');
+  const div = document.createElement('div');
+  div.className = 'caption-box';
+  if (state.selectedCaption === cap.id) div.classList.add('selected');
+  div.style.left = (cap.x * scaleX) + 'px';
+  div.style.top = (cap.y * scaleY) + 'px';
+  div.style.fontFamily = $('fontSelect').value || 'Arial';
+  div.style.fontSize = ($('fontSize').value * scaleY * 0.5) + 'px';
+  div.style.fontWeight = $('boldCheck').checked ? 'bold' : 'normal';
+  div.style.fontStyle = $('italicCheck').checked ? 'italic' : 'normal';
+  div.style.color = $('baseColor').value;
+  div.style.webkitTextStroke = `1px ${$('outlineColor').value}`;
+
+  // Render with line breaks
+  const t = $('videoEl').currentTime;
+  const lines = cap.lines || [cap.words.map((_, i) => i)];
+  const lineDivs = lines.map(lineIdxs => {
+    return lineIdxs.map(wi => {
+      const w = cap.words[wi];
+      const highlighted = t >= w.start && t <= w.end;
+      const color = highlighted ? $('highlightColor').value : $('baseColor').value;
+      if (highlighted && $('highlightBoxCheck').checked) {
+        const boxColor = $('highlightBoxColor').value;
+        return `<span style="color:${color};background:${boxColor};padding:0 2px;border-radius:2px;">${escapeHtml(w.text)}</span>`;
+      }
+      return `<span style="color:${color}">${escapeHtml(w.text)}</span>`;
+    }).join(' ');
+  });
+  div.innerHTML = lineDivs.join('<br>');
+
+  // Drag handler
+  let dragStart = null;
+  div.addEventListener('mousedown', (e) => {
+    if (div.contentEditable === 'true') return;
+    e.stopPropagation();
+    state.selectedCaption = cap.id;
+    state.selectedShape = null;
+    dragStart = { x: e.clientX, y: e.clientY, origX: cap.x, origY: cap.y };
+    renderOverlay();
+  });
+  document.addEventListener('mousemove', (e) => {
+    if (!dragStart) return;
+    const dx = (e.clientX - dragStart.x) / scaleX;
+    const dy = (e.clientY - dragStart.y) / scaleY;
+    cap.x = dragStart.origX + dx;
+    cap.y = dragStart.origY + dy;
+    div.style.left = (cap.x * scaleX) + 'px';
+    div.style.top = (cap.y * scaleY) + 'px';
+  });
+  document.addEventListener('mouseup', () => { dragStart = null; });
+
+  // Double-click to edit text directly on video
+  div.addEventListener('dblclick', (e) => {
+    e.stopPropagation();
+    div.contentEditable = 'true';
+    div.classList.add('editing');
+    div.focus();
+    const finish = () => {
+      div.contentEditable = 'false';
+      div.classList.remove('editing');
+      // Parse the edited text back into words (preserve original timings proportionally)
+      const newText = div.textContent.trim();
+      const newTokens = newText.split(/\s+/).filter(Boolean);
+      const origCount = cap.words.length;
+      if (newTokens.length === origCount) {
+        // Same word count — just update text
+        newTokens.forEach((t, i) => cap.words[i].text = t);
+      } else {
+        // Different count — redistribute timings
+        const totalDur = cap.end - cap.start;
+        const dur = totalDur / newTokens.length;
+        cap.words = newTokens.map((t, i) => ({
+          text: t,
+          start: cap.start + dur * i,
+          end: cap.start + dur * (i + 1),
+        }));
+        cap.lines = wrapIntoLines(cap.words, parseInt($('linesPerCap').value, 10) || 2);
+        // Also push changes back into global words[]
+        rebuildWordsFromCaptions();
+        renderTranscript();
+      }
+      renderOverlay();
+    };
+    div.addEventListener('blur', finish, { once: true });
+    div.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Escape') { ev.preventDefault(); div.blur(); }
+    });
+  });
+
+  overlay.appendChild(div);
+}
+
+function renderShapeBox(s, scaleX, scaleY) {
+  const overlay = $('overlay');
+  const div = document.createElement('div');
+  div.className = 'shape-box';
+  if (state.selectedShape === s.id) div.classList.add('selected');
+  div.style.left = (s.x * scaleX) + 'px';
+  div.style.top = (s.y * scaleY) + 'px';
+  div.style.width = (s.w * scaleX) + 'px';
+  div.style.height = (s.h * scaleY) + 'px';
+  if (s.type === 'circle') {
+    div.style.borderRadius = '50%';
+  }
+  if (s.filled) {
+    div.style.background = hexToRgba(s.color, s.opacity);
+  } else {
+    div.style.border = `${s.stroke || 2}px solid ${hexToRgba(s.color, s.opacity)}`;
+  }
+
+  let drag = null;
+  div.addEventListener('mousedown', (e) => {
+    e.stopPropagation();
+    state.selectedShape = s.id;
+    state.selectedCaption = null;
+    selectShape(s.id);
+    drag = { mode: 'move', x: e.clientX, y: e.clientY, origX: s.x, origY: s.y };
+  });
+
+  // Resize handles
+  ['tl', 'tr', 'bl', 'br'].forEach(corner => {
+    const h = document.createElement('div');
+    h.className = 'resize-handle rh-' + corner;
+    h.addEventListener('mousedown', (e) => {
+      e.stopPropagation();
+      drag = { mode: 'resize', corner, x: e.clientX, y: e.clientY, origX: s.x, origY: s.y, origW: s.w, origH: s.h };
+    });
+    div.appendChild(h);
+  });
+
+  document.addEventListener('mousemove', (e) => {
+    if (!drag) return;
+    const dx = (e.clientX - drag.x) / scaleX;
+    const dy = (e.clientY - drag.y) / scaleY;
+    if (drag.mode === 'move') {
+      s.x = drag.origX + dx;
+      s.y = drag.origY + dy;
+    } else if (drag.mode === 'resize') {
+      const c = drag.corner;
+      if (c.includes('r')) s.w = Math.max(10, drag.origW + dx);
+      if (c.includes('l')) { s.w = Math.max(10, drag.origW - dx); s.x = drag.origX + dx; }
+      if (c.includes('b')) s.h = Math.max(10, drag.origH + dy);
+      if (c.includes('t')) { s.h = Math.max(10, drag.origH - dy); s.y = drag.origY + dy; }
+    }
+    div.style.left = (s.x * scaleX) + 'px';
+    div.style.top = (s.y * scaleY) + 'px';
+    div.style.width = (s.w * scaleX) + 'px';
+    div.style.height = (s.h * scaleY) + 'px';
+  });
+  document.addEventListener('mouseup', () => { drag = null; });
+
+  overlay.appendChild(div);
+}
+
+function rebuildWordsFromCaptions() {
+  state.words = [];
+  for (const c of state.captions) state.words.push(...c.words);
+  state.words.sort((a, b) => a.start - b.start);
+}
+
+// Re-render overlay continuously while video plays (so highlight follows)
+$('videoEl').addEventListener('timeupdate', renderOverlay);
+window.addEventListener('resize', renderOverlay);
+
+// ─── SHAPES ──────────────────────────────────────────────────────────────
+function addShape(type) {
+  const W = state.videoSize.width;
+  const H = state.videoSize.height;
+  const vid = $('videoEl');
+  const s = {
+    id: 'shape_' + state.shapes.length + '_' + Date.now(),
+    type,
+    x: W / 2 - 100,
+    y: H / 2 - 50,
+    w: type === 'line' ? 200 : 200,
+    h: type === 'line' ? 4 : 100,
+    color: '#ff4a4a',
+    opacity: 1,
+    filled: true,
+    stroke: 4,
+    start: vid.currentTime || 0,
+    end: (vid.currentTime || 0) + 3,
+  };
+  state.shapes.push(s);
+  renderShapeList();
+  renderOverlay();
+}
+
+function renderShapeList() {
+  const list = $('shapeList');
+  list.innerHTML = '';
+  state.shapes.forEach((s, i) => {
+    const row = document.createElement('div');
+    row.className = 'shape-row';
+    if (state.selectedShape === s.id) row.classList.add('selected');
+    row.innerHTML = `
+      <div class="swatch" style="background:${s.color}"></div>
+      <span>${s.type} #${i + 1} (${s.start.toFixed(1)}-${s.end.toFixed(1)}s)</span>
+      <button class="del" onclick="event.stopPropagation();deleteShape('${s.id}')">×</button>
+    `;
+    row.addEventListener('click', () => selectShape(s.id));
+    list.appendChild(row);
+  });
+}
+
+function selectShape(id) {
+  state.selectedShape = id;
+  const s = state.shapes.find(x => x.id === id);
+  if (!s) return;
+  $('shapeProps').style.display = 'block';
+  $('shapeColor').value = s.color;
+  $('shapeOpacity').value = s.opacity;
+  $('shapeFilled').checked = s.filled;
+  $('shapeStart').value = s.start;
+  $('shapeEnd').value = s.end;
+  renderShapeList();
+  renderOverlay();
+}
+
+function deleteShape(id) {
+  state.shapes = state.shapes.filter(s => s.id !== id);
+  if (state.selectedShape === id) state.selectedShape = null;
+  renderShapeList();
+  renderOverlay();
+}
+
+['shapeColor', 'shapeOpacity', 'shapeFilled', 'shapeStart', 'shapeEnd'].forEach(id => {
+  $(id).addEventListener('input', () => {
+    const s = state.shapes.find(x => x.id === state.selectedShape);
+    if (!s) return;
+    s.color = $('shapeColor').value;
+    s.opacity = parseFloat($('shapeOpacity').value);
+    s.filled = $('shapeFilled').checked;
+    s.start = parseFloat($('shapeStart').value);
+    s.end = parseFloat($('shapeEnd').value);
+    renderShapeList();
+    renderOverlay();
+  });
 });
-$('sizeInput').addEventListener('input', updatePreview);
-$('yPos').addEventListener('input', updatePreview);
 
-// ─── STYLE GETTER ──────────────────────────────────────────────────────
-function getStyle() {
+// ─── EXPORT ──────────────────────────────────────────────────────────────
+function buildStyle() {
   return {
-    font: $('fontInput').value || 'Arial',
-    fontSize: parseInt($('sizeInput').value) || 64,
-    bold: $('boldInput').checked,
-    baseColor: $('baseHex').value,
-    hlColor: $('hlHex').value,
-    bgColor: $('bgHex').value,
-    useBg: $('bgEnabled').checked,
-    yPercent: parseInt($('yPos').value) || 85
+    font: $('fontSelect').value,
+    size: parseInt($('fontSize').value, 10),
+    baseColor: $('baseColor').value,
+    highlightColor: $('highlightColor').value,
+    outlineColor: $('outlineColor').value,
+    bold: $('boldCheck').checked,
+    italic: $('italicCheck').checked,
+    highlightBox: $('highlightBoxCheck').checked,
+    highlightBoxColor: $('highlightBoxColor').value,
   };
 }
 
-// ─── EXPORT ────────────────────────────────────────────────────────────
-let lastExportedPath = null;
+$('exportBtn').addEventListener('click', async () => {
+  const baseName = state.videoPath.split(/[\\/]/).pop().replace(/\.[^.]+$/, '');
+  const outPath = await window.api.pickSavePath(baseName + '_captioned.mp4');
+  if (!outPath) return;
 
-$('btnExport').addEventListener('click', async () => {
-  const suggested = videoPath.split(/[\\/]/).pop().replace(/\.[^.]+$/, '') + '_captioned.mp4';
-  const outputPath = await window.api.pickSave(suggested);
-  if (!outputPath) return;
-
-  $('btnExport').disabled = true;
-  $('btnOpenInAME').disabled = true;
-  $('btnRevealOutput').disabled = true;
-  $('exportProgress').style.display = 'block';
-  setStatus('busy', 'Exporting captioned video…');
+  setExporting(true);
+  setStatus('Exporting…');
 
   try {
     await window.api.exportVideo({
-      videoPath,
-      outputPath,
-      captionGroups,
-      style: getStyle(),
-      videoMeta
+      videoPath: state.videoPath,
+      captions: state.captions,
+      shapes: state.shapes,
+      style: buildStyle(),
+      videoSize: state.videoSize,
+      outPath,
     });
-    lastExportedPath = outputPath;
-    setStatus('ok', 'Exported: ' + outputPath);
-    $('btnOpenInAME').disabled = false;
-    $('btnRevealOutput').disabled = false;
-  } catch(e) {
-    setStatus('err', 'Export failed: ' + e.message);
+    state.lastOutputPath = outPath;
+    $('outputPath').value = outPath;
+    $('showFolderBtn').disabled = false;
+    $('openVideoBtn').disabled = false;
+    setStatus('✓ Export complete: ' + outPath);
+  } catch (e) {
+    alert('Export failed:\n' + e.message);
+    setStatus('✗ Export failed');
   } finally {
-    $('btnExport').disabled = false;
+    setExporting(false);
   }
 });
 
-$('btnOpenInAME').addEventListener('click', async () => {
-  if (!lastExportedPath) return;
-  setStatus('busy', 'Opening in Adobe Media Encoder…');
+// ─── SEND TO MEDIA ENCODER ───────────────────────────────────────────────
+$('mediaEncoderBtn').addEventListener('click', async () => {
+  const baseName = state.videoPath.split(/[\\/]/).pop().replace(/\.[^.]+$/, '');
+  const outPath = await window.api.pickSavePath(baseName + '_intermediate.mp4');
+  if (!outPath) return;
+
+  setExporting(true);
+  setStatus('Rendering high-quality intermediate for Media Encoder…');
+
   try {
-    const result = await window.api.openInAME(lastExportedPath);
-    if (result.success) {
-      setStatus('ok', 'Sent to Adobe Media Encoder');
+    const result = await window.api.sendToMediaEncoder({
+      videoPath: state.videoPath,
+      captions: state.captions,
+      shapes: state.shapes,
+      style: buildStyle(),
+      videoSize: state.videoSize,
+      outPath,
+    });
+    state.lastOutputPath = result.intermediatePath || outPath;
+    $('outputPath').value = state.lastOutputPath;
+    $('showFolderBtn').disabled = false;
+    $('openVideoBtn').disabled = false;
+    if (result.ok) {
+      setStatus('✓ Intermediate rendered, opening in Media Encoder…');
     } else {
-      setStatus('err', result.error || 'Could not open Media Encoder');
+      setStatus('⚠ Intermediate rendered but ' + (result.error || 'AME not launched'));
+      alert(result.error + '\n\nFile saved to:\n' + (result.intermediatePath || outPath));
     }
-  } catch(e) {
-    setStatus('err', 'AME open failed: ' + e.message);
+  } catch (e) {
+    alert('Render failed:\n' + e.message);
+    setStatus('✗ Render failed');
+  } finally {
+    setExporting(false);
   }
 });
 
-$('btnRevealOutput').addEventListener('click', () => {
-  if (!lastExportedPath) return;
-  window.api.revealFile(lastExportedPath);
+// ─── CUSTOM FULLSCREEN (video + caption overlay together) ─────────────────
+$('fullscreenBtn').addEventListener('click', () => {
+  const wrap = $('videoWrap');
+  if (!document.fullscreenElement) {
+    wrap.requestFullscreen().then(() => {
+      // After entering fullscreen, recompute overlay positions
+      setTimeout(renderOverlay, 100);
+    }).catch(err => alert('Fullscreen failed: ' + err.message));
+  } else {
+    document.exitFullscreen();
+  }
 });
 
-window.api.onExportProgress((data) => {
-  $('exportStage').textContent = data.stage;
-  $('exportPct').textContent = data.percent + '%';
-  $('exportFill').style.width = data.percent + '%';
+document.addEventListener('fullscreenchange', () => {
+  const wrap = $('videoWrap');
+  if (document.fullscreenElement === wrap) {
+    // Make the video fill the screen, overlay scales with it
+    wrap.style.width = '100vw';
+    wrap.style.height = '100vh';
+    wrap.style.display = 'flex';
+    wrap.style.alignItems = 'center';
+    wrap.style.justifyContent = 'center';
+    $('videoEl').style.maxHeight = '100vh';
+    $('videoEl').style.maxWidth = '100vw';
+  } else {
+    wrap.style.width = '';
+    wrap.style.height = '';
+    wrap.style.display = 'block';
+    $('videoEl').style.maxHeight = '';
+    $('videoEl').style.maxWidth = '';
+  }
+  setTimeout(renderOverlay, 100);
 });
 
-// ─── HELPERS ────────────────────────────────────────────────────────────
-function formatTime(sec) {
-  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = Math.floor(sec % 60);
-  return (h ? h + ':' : '') + String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0');
+function setExporting(on) {
+  $('exportBtn').disabled = on;
+  $('mediaEncoderBtn').disabled = on;
+  $('transcribeBtn').disabled = on;
+  $('progressBar').classList.toggle('visible', on);
+  $('progressLabel').classList.toggle('visible', on);
+  if (!on) setProgress(0);
 }
 
-function setStatus(state, msg) {
-  const dot = $('statusDot');
-  dot.className = 'dot ' + (state || '');
-  $('statusText').textContent = msg;
+window.api.onExportProgress((sec) => {
+  // ffmpeg gives us seconds elapsed; show as % of video duration
+  const vid = $('videoEl');
+  if (vid.duration) {
+    const pct = Math.min(100, Math.round((sec / vid.duration) * 100));
+    setProgress(pct);
+    $('progressLabel').textContent = pct + '%';
+  }
+});
+
+$('showFolderBtn').addEventListener('click', () => {
+  if (state.lastOutputPath) window.api.showInFolder(state.lastOutputPath);
+});
+$('openVideoBtn').addEventListener('click', () => {
+  if (state.lastOutputPath) window.api.openInDefaultApp(state.lastOutputPath);
+});
+
+// ─── TABS ────────────────────────────────────────────────────────────────
+document.querySelectorAll('.tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+    tab.classList.add('active');
+    document.querySelector(`.tab-panel[data-panel="${tab.dataset.tab}"]`).classList.add('active');
+  });
+});
+
+// ─── FONTS ───────────────────────────────────────────────────────────────
+async function loadFonts() {
+  $('fontSource').textContent = 'scanning…';
+  const result = await window.api.listFonts();
+  const sel = $('fontSelect');
+  const prev = sel.value;
+  sel.innerHTML = '';
+  result.fonts.forEach(f => {
+    const opt = document.createElement('option');
+    opt.value = f;
+    opt.textContent = f;
+    sel.appendChild(opt);
+  });
+  if (result.fonts.includes(prev)) sel.value = prev;
+  else if (result.fonts.includes('Arial')) sel.value = 'Arial';
+  $('fontSource').textContent = `${result.fonts.length} fonts (${result.source})`;
+  console.log(`Loaded ${result.fonts.length} fonts via ${result.source}`);
+}
+loadFonts();
+
+$('rescanFontsBtn').addEventListener('click', loadFonts);
+
+$('highlightBoxCheck').addEventListener('change', () => {
+  $('boxColorField').style.display = $('highlightBoxCheck').checked ? 'block' : 'none';
+  renderOverlay();
+});
+
+['fontSelect', 'fontSize', 'baseColor', 'highlightColor', 'outlineColor', 'boldCheck', 'italicCheck'].forEach(id => {
+  $(id).addEventListener('input', renderOverlay);
+});
+
+['wordsPerCap', 'linesPerCap'].forEach(id => {
+  $(id).addEventListener('change', () => {
+    if (state.words.length) {
+      state.captions = groupWordsIntoCaptions(state.words);
+      renderOverlay();
+    }
+  });
+});
+
+// ─── UPDATES ─────────────────────────────────────────────────────────────
+(async () => {
+  const v = await window.api.getAppVersion();
+  $('versionLabel').textContent = 'v' + v;
+})();
+
+$('checkUpdateBtn').addEventListener('click', async () => {
+  $('checkUpdateBtn').textContent = 'Checking…';
+  const r = await window.api.checkForUpdate();
+  if (!r.ok) {
+    alert('Update check failed: ' + r.error);
+  }
+  setTimeout(() => { $('checkUpdateBtn').textContent = 'Check for updates'; }, 2000);
+});
+
+window.api.onUpdateAvailable((info) => {
+  $('updateTitle').textContent = 'Update available: v' + info.version;
+  $('updateMsg').textContent = 'A new version is ready to download.';
+  $('updateToast').classList.add('visible');
+  $('updatePill').classList.add('visible');
+});
+window.api.onUpdateNotAvailable(() => {
+  setStatus('App is up to date');
+});
+window.api.onUpdateProgress((p) => {
+  $('updateMsg').textContent = `Downloading… ${Math.round(p.percent)}%`;
+});
+window.api.onUpdateDownloaded((info) => {
+  $('updateTitle').textContent = 'Update ready';
+  $('updateMsg').textContent = 'Restart to install v' + info.version;
+  $('updateNow').textContent = 'Restart & Install';
+  $('updateNow').onclick = () => window.api.installUpdate();
+});
+window.api.onUpdateError((msg) => {
+  console.error('Update error:', msg);
+});
+
+$('updateLater').addEventListener('click', () => $('updateToast').classList.remove('visible'));
+$('updateNow').addEventListener('click', async () => {
+  $('updateMsg').textContent = 'Downloading…';
+  await window.api.downloadUpdate();
+});
+$('updatePill').addEventListener('click', () => $('updateToast').classList.add('visible'));
+
+// ─── UTILS ───────────────────────────────────────────────────────────────
+function setStatus(s) { $('statusLabel').textContent = s; }
+function setProgress(pct) { $('progressFill').style.width = pct + '%'; }
+function escapeHtml(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+function hexToRgba(hex, alpha = 1) {
+  const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex);
+  if (!m) return `rgba(255,255,255,${alpha})`;
+  const r = parseInt(m[1], 16), g = parseInt(m[2], 16), b = parseInt(m[3], 16);
+  return `rgba(${r},${g},${b},${alpha})`;
 }
 </script>
 </body>

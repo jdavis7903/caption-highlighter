@@ -1,522 +1,641 @@
-// main.js — Electron main process
-const { app, BrowserWindow, ipcMain, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, Menu } = require('electron');
+const { autoUpdater } = require('electron-updater');
 const path = require('path');
 const fs = require('fs');
-const { spawn, execFile } = require('child_process');
 const os = require('os');
+const { spawn, execFile } = require('child_process');
 
-// Paths to bundled binaries — works in both dev and packaged mode
-// In dev: ../bin/ relative to this file
-// When packaged: process.resourcesPath/bin/
-const BIN_DIR = app.isPackaged
-  ? path.join(process.resourcesPath, 'bin')
-  : path.resolve(__dirname, '..', 'bin');
+// ─── PATHS ──────────────────────────────────────────────────────────────
+const isPackaged = app.isPackaged;
+const RESOURCES_DIR = isPackaged
+  ? path.join(process.resourcesPath)
+  : path.join(__dirname, '..');
+const BIN_DIR = path.join(RESOURCES_DIR, 'bin');
 
 const WHISPER_EXE = path.join(BIN_DIR, 'whisper-cli.exe');
-const WHISPER_EXE_ALT = path.join(BIN_DIR, 'main.exe'); // older naming
 const WHISPER_MODEL = path.join(BIN_DIR, 'ggml-medium.en.bin');
-const FFMPEG_EXE = path.join(BIN_DIR, 'ffmpeg.exe');
-const FFPROBE_EXE = path.join(BIN_DIR, 'ffprobe.exe');
+const FFMPEG = path.join(BIN_DIR, 'ffmpeg.exe');
+const FFPROBE = path.join(BIN_DIR, 'ffprobe.exe');
 
-function resolveWhisper() {
-  if (fs.existsSync(WHISPER_EXE)) return WHISPER_EXE;
-  if (fs.existsSync(WHISPER_EXE_ALT)) return WHISPER_EXE_ALT;
-  return null;
-}
+let mainWindow = null;
 
-let mainWindow;
-
+// ─── WINDOW ─────────────────────────────────────────────────────────────
 function createWindow() {
   mainWindow = new BrowserWindow({
-    width: 1200,
-    height: 800,
-    minWidth: 900,
-    minHeight: 600,
-    backgroundColor: '#1a1a1f',
-    title: 'Caption Highlighter',
+    width: 1400,
+    height: 900,
+    minWidth: 1100,
+    minHeight: 700,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
-      nodeIntegration: false
-    }
+      nodeIntegration: false,
+    },
+    backgroundColor: '#1a1a1a',
+    show: false,
   });
 
-  mainWindow.loadFile(path.join(__dirname, 'index.html'));
-  // mainWindow.webContents.openDevTools(); // uncomment for debugging
+  mainWindow.once('ready-to-show', () => mainWindow.show());
+  mainWindow.loadFile('index.html');
+
+  // Strip the default menu in production, keep DevTools in dev
+  if (isPackaged) {
+    Menu.setApplicationMenu(null);
+  }
 }
 
-app.whenReady().then(createWindow);
-app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
-
-// ─── IPC: reveal file in Explorer ──────────────────────────────────────────
-const { shell } = require('electron');
-
-ipcMain.handle('reveal-file', async (event, filePath) => {
-  shell.showItemInFolder(filePath);
-  return { success: true };
+app.whenReady().then(() => {
+  createWindow();
+  // Check for updates 3 seconds after launch (let UI settle first)
+  if (isPackaged) {
+    setTimeout(() => {
+      autoUpdater.checkForUpdates().catch(err => {
+        console.log('Update check failed:', err.message);
+      });
+    }, 3000);
+  }
 });
 
-// ─── IPC: open in Adobe Media Encoder ──────────────────────────────────────
-ipcMain.handle('open-in-ame', async (event, filePath) => {
-  // Try common AME install paths
-  const candidatePaths = [];
+app.on('window-all-closed', () => {
+  if (process.platform !== 'darwin') app.quit();
+});
 
-  // Look for AME 2026, 2025, 2024 in standard install locations
-  const programFiles = process.env['ProgramFiles'] || 'C:\\Program Files';
-  const years = ['2026', '2025', '2024', '2023', '2022'];
-  for (const year of years) {
-    candidatePaths.push(path.join(programFiles, 'Adobe', `Adobe Media Encoder ${year}`, 'Adobe Media Encoder.exe'));
-  }
+// ─── AUTO UPDATER ───────────────────────────────────────────────────────
+autoUpdater.autoDownload = false;
+autoUpdater.autoInstallOnAppQuit = true;
 
-  // Find the first one that exists
-  let amePath = null;
-  for (const p of candidatePaths) {
-    if (fs.existsSync(p)) { amePath = p; break; }
-  }
+autoUpdater.on('update-available', (info) => {
+  if (mainWindow) mainWindow.webContents.send('update-available', info);
+});
+autoUpdater.on('update-not-available', () => {
+  if (mainWindow) mainWindow.webContents.send('update-not-available');
+});
+autoUpdater.on('download-progress', (progress) => {
+  if (mainWindow) mainWindow.webContents.send('update-progress', progress);
+});
+autoUpdater.on('update-downloaded', (info) => {
+  if (mainWindow) mainWindow.webContents.send('update-downloaded', info);
+});
+autoUpdater.on('error', (err) => {
+  if (mainWindow) mainWindow.webContents.send('update-error', err.message);
+});
 
-  if (!amePath) {
-    // Fallback: try shell.openPath which will use the default app for .mp4
-    // but that won't be AME. Better to fail explicitly.
-    return {
-      success: false,
-      error: 'Adobe Media Encoder not found. Checked standard locations for years 2022–2026.'
-    };
-  }
-
-  // Launch AME with the file as an argument — this adds it to the queue
+ipcMain.handle('check-for-update', async () => {
   try {
-    const proc = spawn(amePath, [filePath], { detached: true, stdio: 'ignore' });
-    proc.unref();
-    return { success: true, amePath };
+    const result = await autoUpdater.checkForUpdates();
+    return { ok: true, info: result?.updateInfo };
   } catch (e) {
-    return { success: false, error: e.message };
+    return { ok: false, error: e.message };
   }
 });
 
-// ─── IPC: list installed system fonts ──────────────────────────────────────
-ipcMain.handle('list-fonts', async () => {
-  return new Promise((resolve) => {
-    const fonts = new Set();
-
-    if (process.platform === 'win32') {
-      // Read from Windows registry — lists all installed fonts
-      execFile('reg', [
-        'query',
-        'HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Fonts'
-      ], { maxBuffer: 10 * 1024 * 1024 }, (err, stdout) => {
-        if (!err && stdout) {
-          // Each line looks like:  FontName (TrueType)    REG_SZ    something.ttf
-          stdout.split(/\r?\n/).forEach(line => {
-            // Match the font name before "(TrueType)" or similar suffix
-            const m = line.match(/^\s{4}(.+?)\s+(?:\((?:TrueType|OpenType|Vector|Raster)\)\s+)?REG_SZ/);
-            if (m) {
-              // Clean up the name: "Arial Bold (TrueType)" → "Arial Bold"
-              let name = m[1].trim()
-                .replace(/\s*\((?:TrueType|OpenType|Vector|Raster)\)\s*$/i, '')
-                .trim();
-              // Some entries have multiple names separated by " & "
-              name.split(/\s*&\s*/).forEach(n => {
-                if (n) fonts.add(n);
-              });
-            }
-          });
-        }
-        // Also scan the per-user fonts folder (Windows 10+)
-        const userFontsDir = path.join(os.homedir(), 'AppData', 'Local', 'Microsoft', 'Windows', 'Fonts');
-        if (fs.existsSync(userFontsDir)) {
-          try {
-            fs.readdirSync(userFontsDir).forEach(f => {
-              const name = f.replace(/\.(ttf|otf|ttc|fon)$/i, '');
-              if (name) fonts.add(name);
-            });
-          } catch (e) {}
-        }
-        resolve(Array.from(fonts).sort((a, b) => a.localeCompare(b)));
-      });
-    } else if (process.platform === 'darwin') {
-      // macOS: use system_profiler
-      execFile('system_profiler', ['SPFontsDataType', '-json'], { maxBuffer: 20 * 1024 * 1024 }, (err, stdout) => {
-        if (!err && stdout) {
-          try {
-            const data = JSON.parse(stdout);
-            (data.SPFontsDataType || []).forEach(f => {
-              if (f._name) fonts.add(f._name);
-            });
-          } catch (e) {}
-        }
-        resolve(Array.from(fonts).sort((a, b) => a.localeCompare(b)));
-      });
-    } else {
-      // Linux fallback: fc-list
-      execFile('fc-list', [':', 'family'], (err, stdout) => {
-        if (!err && stdout) {
-          stdout.split('\n').forEach(line => {
-            line.split(',').forEach(name => {
-              const n = name.trim();
-              if (n) fonts.add(n);
-            });
-          });
-        }
-        resolve(Array.from(fonts).sort((a, b) => a.localeCompare(b)));
-      });
-    }
-  });
+ipcMain.handle('download-update', async () => {
+  try {
+    await autoUpdater.downloadUpdate();
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
 });
 
-// ─── IPC: health check binaries ────────────────────────────────────────────
-ipcMain.handle('check-binaries', async () => {
-  return {
-    whisper: !!resolveWhisper(),
-    whisperPath: resolveWhisper(),
-    model: fs.existsSync(WHISPER_MODEL),
-    modelPath: WHISPER_MODEL,
-    ffmpeg: fs.existsSync(FFMPEG_EXE),
-    ffmpegPath: FFMPEG_EXE,
-    ffprobe: fs.existsSync(FFPROBE_EXE)
-  };
+ipcMain.handle('install-update', () => {
+  autoUpdater.quitAndInstall();
 });
 
-// ─── IPC: file picker ──────────────────────────────────────────────────────
+ipcMain.handle('get-app-version', () => app.getVersion());
+
+// ─── FILE DIALOGS ───────────────────────────────────────────────────────
 ipcMain.handle('pick-video', async () => {
   const result = await dialog.showOpenDialog(mainWindow, {
     properties: ['openFile'],
-    filters: [
-      { name: 'Video', extensions: ['mp4', 'mov', 'mkv', 'avi', 'webm', 'm4v'] },
-      { name: 'All Files', extensions: ['*'] }
-    ]
+    filters: [{ name: 'Video', extensions: ['mp4', 'mov', 'mkv', 'avi', 'webm', 'm4v'] }],
   });
-  if (result.canceled || !result.filePaths.length) return null;
-  return result.filePaths[0];
+  return result.canceled ? null : result.filePaths[0];
 });
 
-ipcMain.handle('pick-save', async (event, suggestedName) => {
+ipcMain.handle('pick-save-path', async (_e, suggestedName) => {
   const result = await dialog.showSaveDialog(mainWindow, {
-    defaultPath: suggestedName || 'captioned-video.mp4',
-    filters: [{ name: 'MP4 Video', extensions: ['mp4'] }]
+    defaultPath: suggestedName || 'output.mp4',
+    filters: [{ name: 'MP4 Video', extensions: ['mp4'] }],
   });
-  if (result.canceled || !result.filePath) return null;
-  return result.filePath;
+  return result.canceled ? null : result.filePath;
 });
 
-// ─── IPC: probe video for dimensions/duration/fps ──────────────────────────
-ipcMain.handle('probe-video', async (event, videoPath) => {
+ipcMain.handle('show-in-folder', (_e, filePath) => {
+  if (filePath && fs.existsSync(filePath)) {
+    shell.showItemInFolder(filePath);
+    return true;
+  }
+  return false;
+});
+
+ipcMain.handle('open-in-default-app', (_e, filePath) => {
+  if (filePath && fs.existsSync(filePath)) {
+    shell.openPath(filePath);
+    return true;
+  }
+  return false;
+});
+
+// ─── FONT ENUMERATION (robust, multi-strategy) ───────────────────────────
+ipcMain.handle('list-fonts', async () => {
+  // Strategy 1: PowerShell + .NET InstalledFontCollection (best, but can be blocked)
+  const tryPowerShell = () => new Promise((resolve) => {
+    const ps = spawn('powershell.exe', [
+      '-NoProfile',
+      '-NonInteractive',
+      '-ExecutionPolicy', 'Bypass',
+      '-Command',
+      "Add-Type -AssemblyName System.Drawing; " +
+      "(New-Object System.Drawing.Text.InstalledFontCollection).Families | " +
+      "ForEach-Object { $_.Name } | Sort-Object -Unique"
+    ], { windowsHide: true });
+
+    let out = '';
+    let err = '';
+    const timer = setTimeout(() => { ps.kill('SIGKILL'); resolve(null); }, 10000);
+
+    ps.stdout.on('data', d => out += d.toString());
+    ps.stderr.on('data', d => err += d.toString());
+    ps.on('close', (code) => {
+      clearTimeout(timer);
+      if (code === 0 && out.trim()) {
+        const fonts = out.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+        if (fonts.length > 5) return resolve(fonts);
+      }
+      resolve(null);
+    });
+    ps.on('error', () => { clearTimeout(timer); resolve(null); });
+  });
+
+  // Strategy 2: Read C:\Windows\Fonts directory + strip extensions
+  const tryFontsFolder = () => {
+    try {
+      const fontsDir = path.join(process.env.WINDIR || 'C:\\Windows', 'Fonts');
+      if (!fs.existsSync(fontsDir)) return null;
+      const files = fs.readdirSync(fontsDir);
+      const names = new Set();
+      for (const f of files) {
+        if (!/\.(ttf|otf|ttc|fon)$/i.test(f)) continue;
+        // Strip extension and common suffixes
+        let name = f.replace(/\.(ttf|otf|ttc|fon)$/i, '');
+        name = name.replace(/[-_](bold|italic|regular|light|medium|black|thin|semibold|extrabold|condensed)/gi, '');
+        name = name.replace(/[-_]/g, ' ').trim();
+        if (name) names.add(name);
+      }
+      return Array.from(names).sort();
+    } catch {
+      return null;
+    }
+  };
+
+  // Strategy 3: Hardcoded common Windows fonts (last-resort fallback)
+  const fallbackFonts = () => [
+    'Arial', 'Arial Black', 'Calibri', 'Cambria', 'Candara', 'Comic Sans MS',
+    'Consolas', 'Constantia', 'Corbel', 'Courier New', 'Ebrima', 'Franklin Gothic',
+    'Gabriola', 'Gadugi', 'Georgia', 'Impact', 'Javanese Text', 'Leelawadee UI',
+    'Lucida Console', 'Lucida Sans Unicode', 'Malgun Gothic', 'Microsoft Himalaya',
+    'Microsoft JhengHei', 'Microsoft New Tai Lue', 'Microsoft PhagsPa', 'Microsoft Sans Serif',
+    'Microsoft Tai Le', 'Microsoft YaHei', 'MingLiU', 'Mongolian Baiti', 'MS Gothic',
+    'MV Boli', 'Myanmar Text', 'Nirmala UI', 'Palatino Linotype', 'Segoe Print',
+    'Segoe Script', 'Segoe UI', 'Segoe UI Emoji', 'Segoe UI Historic', 'Segoe UI Symbol',
+    'SimSun', 'Sitka', 'Sylfaen', 'Symbol', 'Tahoma', 'Times New Roman', 'Trebuchet MS',
+    'Verdana', 'Webdings', 'Wingdings', 'Yu Gothic'
+  ];
+
+  const ps = await tryPowerShell();
+  if (ps) return { fonts: ps, source: 'powershell' };
+
+  const folder = tryFontsFolder();
+  if (folder && folder.length > 5) return { fonts: folder, source: 'folder' };
+
+  return { fonts: fallbackFonts(), source: 'fallback' };
+});
+
+// ─── PROBE VIDEO ────────────────────────────────────────────────────────
+ipcMain.handle('probe-video', async (_e, videoPath) => {
   return new Promise((resolve, reject) => {
-    execFile(FFPROBE_EXE, [
+    execFile(FFPROBE, [
       '-v', 'error',
-      '-select_streams', 'v:0',
-      '-show_entries', 'stream=width,height,r_frame_rate,duration',
-      '-of', 'json',
+      '-print_format', 'json',
+      '-show_format',
+      '-show_streams',
       videoPath
-    ], (err, stdout) => {
+    ], { maxBuffer: 10 * 1024 * 1024 }, (err, stdout) => {
       if (err) return reject(err);
       try {
         const data = JSON.parse(stdout);
-        const s = data.streams[0];
-        const [num, den] = s.r_frame_rate.split('/').map(Number);
+        const v = data.streams.find(s => s.codec_type === 'video');
         resolve({
-          width: s.width,
-          height: s.height,
-          fps: num / den,
-          duration: parseFloat(s.duration)
+          width: v?.width || 1920,
+          height: v?.height || 1080,
+          duration: parseFloat(data.format.duration) || 0,
+          fps: v?.r_frame_rate ? eval(v.r_frame_rate) : 30,
         });
-      } catch (e) { reject(e); }
+      } catch (e) {
+        reject(e);
+      }
     });
   });
 });
 
-// ─── IPC: transcribe ───────────────────────────────────────────────────────
-ipcMain.handle('transcribe', async (event, videoPath) => {
-  const whisperPath = resolveWhisper();
-  if (!whisperPath) throw new Error('whisper binary not found in bin folder');
-  if (!fs.existsSync(WHISPER_MODEL)) throw new Error('whisper model not found in bin folder');
-  if (!fs.existsSync(FFMPEG_EXE)) throw new Error('ffmpeg not found in bin folder');
-
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'capapp-'));
+// ─── TRANSCRIBE ─────────────────────────────────────────────────────────
+ipcMain.handle('transcribe', async (_e, videoPath, opts = {}) => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'caphi-'));
   const wavPath = path.join(tmpDir, 'audio.wav');
-  const jsonPath = path.join(tmpDir, 'audio.json');
+  const forceMode = opts.forceMode || 'auto'; // 'auto' | 'gpu' | 'cpu'
 
-  // Step 1: extract audio as 16kHz mono WAV (what whisper needs)
-  mainWindow.webContents.send('progress', { stage: 'extracting audio', percent: 5 });
-
+  // Extract mono 16kHz WAV
   await new Promise((resolve, reject) => {
-    execFile(FFMPEG_EXE, [
-      '-y',
-      '-i', videoPath,
-      '-vn',
-      '-ac', '1',
-      '-ar', '16000',
-      '-acodec', 'pcm_s16le',
+    execFile(FFMPEG, [
+      '-y', '-i', videoPath,
+      '-ar', '16000', '-ac', '1', '-c:a', 'pcm_s16le',
       wavPath
     ], (err) => err ? reject(err) : resolve());
   });
 
-  mainWindow.webContents.send('progress', { stage: 'transcribing', percent: 15 });
+  // Run whisper-cli with GPU + flash-attn
+  // CRITICAL: cwd MUST be BIN_DIR so the CUDA DLLs resolve
+  const outBase = path.join(tmpDir, 'audio');
 
-  // Step 2: run whisper.cpp with word-level timestamps and JSON output
-  const wOut = path.join(tmpDir, 'audio'); // whisper appends .json
-  await new Promise((resolve, reject) => {
-    const proc = spawn(whisperPath, [
+  // Diagnostics collected from whisper's own stderr output
+  const diag = {
+    backend: 'unknown',     // 'CUDA' | 'CPU' | 'unknown'
+    backendLine: '',
+    gpuDevice: '',
+    elapsedMs: 0,
+    encodeMs: 0,
+    rawLog: '',
+  };
+
+  const dbg = (msg) => { if (mainWindow) mainWindow.webContents.send('transcribe-debug', msg); };
+
+  const runWhisper = (useGpu) => new Promise((resolve, reject) => {
+    const args = [
       '-m', WHISPER_MODEL,
       '-f', wavPath,
-      '-oj',            // output JSON
-      '-of', wOut,      // output file path (no extension)
-      '-ml', '1',       // max segment length = 1 token (word-level)
-      '--print-progress'
-    ]);
-
-    let stderr = '';
-    proc.stderr.on('data', (d) => {
-      const s = d.toString();
-      stderr += s;
-      // whisper prints progress like "progress = 42%"
-      const m = s.match(/progress\s*=\s*(\d+)%/);
-      if (m) {
-        const pct = 15 + Math.floor(parseInt(m[1]) * 0.75); // 15-90%
-        mainWindow.webContents.send('progress', { stage: 'transcribing', percent: pct });
-      }
-    });
-
-    proc.on('error', reject);
-    proc.on('close', (code) => {
-      if (code !== 0) reject(new Error('whisper failed (exit ' + code + ')\n' + stderr.slice(-2000)));
-      else resolve();
-    });
-  });
-
-  // Step 3: parse the JSON
-  const finalJsonPath = wOut + '.json';
-  if (!fs.existsSync(finalJsonPath)) {
-    throw new Error('whisper did not produce JSON output at ' + finalJsonPath);
-  }
-  const whisperJson = JSON.parse(fs.readFileSync(finalJsonPath, 'utf8'));
-  const words = extractWords(whisperJson);
-
-  mainWindow.webContents.send('progress', { stage: 'done', percent: 100 });
-
-  // Cleanup
-  try {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
-  } catch (e) {}
-
-  return { words };
-});
-
-function extractWords(whisperJson) {
-  // whisper.cpp JSON output: { transcription: [ {timestamps:{from,to}, text, ...}, ... ] }
-  // With -ml 1 each entry is essentially one word/token
-  const out = [];
-  const segs = whisperJson.transcription || whisperJson.segments || [];
-  for (const s of segs) {
-    const text = (s.text || '').replace(/^\s+|\s+$/g, '');
-    if (!text) continue;
-    let startMs, endMs;
-    if (s.timestamps) {
-      // "00:00:01,200" format
-      startMs = parseTimestamp(s.timestamps.from);
-      endMs = parseTimestamp(s.timestamps.to);
-    } else if (s.offsets) {
-      startMs = s.offsets.from;
-      endMs = s.offsets.to;
-    } else if (s.start != null) {
-      startMs = s.start * 1000;
-      endMs = s.end * 1000;
-    } else continue;
-
-    // text may contain multiple words; split conservatively
-    const subwords = text.split(/\s+/).filter(Boolean);
-    if (subwords.length === 1) {
-      out.push({ text: subwords[0], start: startMs / 1000, end: endMs / 1000 });
-    } else {
-      const dur = (endMs - startMs) / subwords.length / 1000;
-      subwords.forEach((w, i) => {
-        out.push({ text: w, start: (startMs / 1000) + i * dur, end: (startMs / 1000) + (i + 1) * dur });
-      });
-    }
-  }
-  return out;
-}
-
-function parseTimestamp(ts) {
-  // "HH:MM:SS,mmm" or "HH:MM:SS.mmm"
-  const m = ts.match(/(\d+):(\d+):(\d+)[,.](\d+)/);
-  if (!m) return 0;
-  return (parseInt(m[1]) * 3600 + parseInt(m[2]) * 60 + parseInt(m[3])) * 1000 + parseInt(m[4]);
-}
-
-// ─── IPC: export final video with burned-in captions ───────────────────────
-ipcMain.handle('export-video', async (event, opts) => {
-  const { videoPath, outputPath, captionGroups, style, videoMeta } = opts;
-
-  if (!fs.existsSync(FFMPEG_EXE)) throw new Error('ffmpeg not found');
-
-  // We render captions to a transparent PNG sequence first, then overlay
-  // For simplicity, generate an ASS subtitle file with karaoke styling
-  // OR render via drawtext filter (we'll use drawtext for max control)
-  
-  // For per-word highlighting with backgrounds, the cleanest approach is
-  // to generate an SVG/PNG overlay sequence — but that's slow.
-  //
-  // Simpler: use ffmpeg's `drawtext` filter with one expression per word.
-  // BUT drawtext doesn't natively support per-word background boxes that
-  // jump positions. So we render a transparent PNG sequence in Node, then
-  // overlay it onto the video.
-
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'capexport-'));
-  const overlayPath = path.join(tmpDir, 'overlay.mov'); // transparent video
-
-  mainWindow.webContents.send('export-progress', { stage: 'rendering overlay', percent: 5 });
-
-  // Build an ASS subtitle file — this is the easiest way to get per-word styling
-  const assPath = path.join(tmpDir, 'subs.ass');
-  fs.writeFileSync(assPath, buildASS(captionGroups, style, videoMeta));
-
-  mainWindow.webContents.send('export-progress', { stage: 'encoding video', percent: 20 });
-
-  // Burn the subtitles into the video
-  // ffmpeg's subtitles filter requires a properly escaped path on Windows
-  const assPathEsc = assPath.replace(/\\/g, '/').replace(/:/g, '\\:');
-
-  await new Promise((resolve, reject) => {
-    const args = [
-      '-y',
-      '-i', videoPath,
-      '-vf', `subtitles='${assPathEsc}'`,
-      '-c:a', 'copy',
-      '-c:v', 'libx264',
-      '-preset', 'medium',
-      '-crf', '20',
-      outputPath
+      '-oj',
+      '-of', outBase,
+      '-ml', '1',
+      '--print-progress',
     ];
-    const proc = spawn(FFMPEG_EXE, args);
+    if (useGpu) {
+      args.push('-fa'); // flash attention (GPU)
+    } else {
+      args.push('-ng'); // no GPU
+    }
+
+    dbg(`> whisper-cli ${args.join(' ')}`);
+    dbg(`> cwd: ${BIN_DIR}`);
+    const t0 = Date.now();
+
+    const proc = spawn(WHISPER_EXE, args, {
+      cwd: BIN_DIR,
+      windowsHide: true,
+    });
     let stderr = '';
-    let lastReported = 0;
-    proc.stderr.on('data', (d) => {
-      const s = d.toString();
-      stderr += s;
-      const m = s.match(/time=(\d+):(\d+):(\d+)/);
-      if (m && videoMeta.duration) {
-        const sec = parseInt(m[1]) * 3600 + parseInt(m[2]) * 60 + parseInt(m[3]);
-        const pct = 20 + Math.min(75, Math.floor((sec / videoMeta.duration) * 75));
-        if (pct - lastReported >= 1) {
-          lastReported = pct;
-          mainWindow.webContents.send('export-progress', { stage: 'encoding', percent: pct });
-        }
+    let stdout = '';
+    let sawCuda = false;
+
+    proc.stdout.on('data', d => {
+      const text = d.toString();
+      stdout += text;
+      const m = text.match(/progress\s*=\s*(\d+)%/i);
+      if (m && mainWindow) {
+        mainWindow.webContents.send('transcribe-progress', parseInt(m[1], 10));
       }
     });
-    proc.on('error', reject);
-    proc.on('close', (code) => {
-      if (code !== 0) reject(new Error('ffmpeg failed:\n' + stderr.slice(-2000)));
-      else resolve();
+
+    proc.stderr.on('data', d => {
+      const text = d.toString();
+      stderr += text;
+      diag.rawLog += text;
+      // Forward each line to the debug panel
+      text.split(/\r?\n/).forEach(line => { if (line.trim()) dbg(line.trim()); });
+
+      // Detect backend. whisper.cpp prints lines like:
+      //   "whisper_backend_init_gpu: using CUDA backend"
+      //   "ggml_cuda_init: found 1 CUDA devices:"
+      //   "  Device 0: NVIDIA GeForce RTX 4070, compute capability 8.9"
+      if (/using CUDA backend|ggml_cuda_init|CUDA devices/i.test(text)) {
+        sawCuda = true;
+        diag.backend = 'CUDA';
+      }
+      const devMatch = text.match(/Device \d+:\s*(.+?)(?:,|$)/);
+      if (devMatch) diag.gpuDevice = devMatch[1].trim();
+      const backendMatch = text.match(/using (\w+) backend/i);
+      if (backendMatch) diag.backendLine = backendMatch[0];
+      // whisper prints timing summary at the end:
+      //   "whisper_print_timings: encode time = ..."
+      const encMatch = text.match(/encode time\s*=\s*([\d.]+)\s*ms/i);
+      if (encMatch) diag.encodeMs = parseFloat(encMatch[1]);
     });
+
+    proc.on('close', (code) => {
+      diag.elapsedMs = Date.now() - t0;
+      if (!useGpu) diag.backend = 'CPU';
+      else if (!sawCuda && diag.backend !== 'CUDA') diag.backend = 'CPU';
+      if (code === 0) resolve({ stdout, stderr, sawCuda });
+      else reject(new Error(`whisper failed (exit ${code})\n${stderr.slice(-600)}`));
+    });
+    proc.on('error', (err) => reject(err));
   });
 
-  mainWindow.webContents.send('export-progress', { stage: 'done', percent: 100 });
-
-  try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (e) {}
-
-  return { outputPath };
-});
-
-// ─── ASS subtitle generator (karaoke-style word highlighting) ──────────────
-function buildASS(captionGroups, style, meta) {
-  // ASS format with libass supports per-word color changes via inline tags
-  const W = meta.width;
-  const H = meta.height;
-
-  // Convert hex color to ASS &HBBGGRR format (note: BGR order, not RGB)
-  function hex2ass(hex) {
-    hex = hex.replace(/^#/, '');
-    const r = hex.substring(0, 2);
-    const g = hex.substring(2, 4);
-    const b = hex.substring(4, 6);
-    return `&H00${b}${g}${r}`.toUpperCase();
-  }
-
-  // Compute Y position (style.yPercent is from top, ASS uses Alignment + MarginV)
-  // We'll use Alignment 2 (bottom-center) and compute MarginV
-  const yPos = Math.round(H * (style.yPercent / 100));
-  const marginV = H - yPos;
-
-  const fontName = style.font || 'Arial';
-  const fontSize = style.fontSize || 64;
-  const baseCol = hex2ass(style.baseColor);
-  const hlCol = hex2ass(style.hlColor);
-  const bgCol = hex2ass(style.bgColor);
-
-  let ass = `[Script Info]
-Title: Caption Highlighter
-ScriptType: v4.00+
-PlayResX: ${W}
-PlayResY: ${H}
-WrapStyle: 2
-ScaledBorderAndShadow: yes
-
-[V4+ Styles]
-Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Base,${fontName},${fontSize},${baseCol},${baseCol},&H00000000,&H80000000,${style.bold ? -1 : 0},0,0,0,100,100,0,0,1,3,0,2,30,30,${marginV},1
-
-[Events]
-Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
-`;
-
-  // Group consecutive words into captions (already grouped from UI)
-  for (const group of captionGroups) {
-    // Each group becomes one dialogue line that spans the group's duration
-    // with per-word color changes using \r and \k tags (or inline color)
-    //
-    // Approach: emit ONE dialogue line per word, layered so only the
-    // currently-spoken word shows in highlight color. But ASS lets us do
-    // it cleaner: emit one line per word-state with the full caption text,
-    // highlighting one word.
-    //
-    // Simplest reliable: emit one line per word that shows the full caption
-    // with that word's color overridden.
-
-    const fullText = group.words.map(w => w.text).join(' ');
-
-    for (let i = 0; i < group.words.length; i++) {
-      const w = group.words[i];
-      // Build text with one word in highlight color (and optional bg)
-      // ASS inline override codes:
-      //   {\c&HBBGGRR&} sets primary color
-      //   {\3c} sets outline color
-      //   {\4c} sets back/shadow color
-      //   {\bord3} sets border thickness
-      // Background-as-box behind a single word is tricky in pure ASS.
-      // libass DOES support a "highlight" with \4a&H00& + \4c&H...& + BorderStyle 3
-      // but BorderStyle is per-style not per-word. So for per-word bg we'd need
-      // a separate \r override switch. We'll do it via inline override.
-
-      let line = '';
-      for (let j = 0; j < group.words.length; j++) {
-        if (j > 0) line += ' ';
-        const word = group.words[j].text.replace(/[{}]/g, '');
-        if (j === i) {
-          if (style.useBg) {
-            // Use \4c for background-style with border-3 trick won't work per-word.
-            // Fallback: just color the highlighted word.
-            line += `{\\c${hlCol}\\b1}${word}{\\r}`;
-          } else {
-            line += `{\\c${hlCol}\\b1}${word}{\\r}`;
-          }
-        } else {
-          line += word;
-        }
+  let gpuWorked = false;
+  if (forceMode === 'cpu') {
+    await runWhisper(false);
+    gpuWorked = false;
+  } else {
+    try {
+      const r = await runWhisper(true);
+      gpuWorked = r.sawCuda;
+      if (!r.sawCuda && forceMode === 'auto') {
+        dbg('⚠️ GPU requested but no CUDA backend detected — whisper ran on CPU.');
       }
-
-      const start = formatASSTime(w.start);
-      const end = formatASSTime(w.end);
-      ass += `Dialogue: 0,${start},${end},Base,,0,0,0,,${line}\n`;
+    } catch (gpuErr) {
+      dbg('✗ GPU run failed: ' + gpuErr.message);
+      if (forceMode === 'gpu') throw gpuErr; // user forced GPU, don't silently fall back
+      if (mainWindow) mainWindow.webContents.send('transcribe-gpu-fallback', gpuErr.message);
+      await runWhisper(false);
+      gpuWorked = false;
     }
   }
 
-  return ass;
+  // Parse the JSON output
+  const jsonPath = outBase + '.json';
+  if (!fs.existsSync(jsonPath)) {
+    throw new Error('whisper did not produce JSON output');
+  }
+  const raw = JSON.parse(fs.readFileSync(jsonPath, 'utf-8'));
+
+  // Flatten into word list with timestamps
+  const words = [];
+  for (const seg of raw.transcription || []) {
+    const text = (seg.text || '').trim();
+    if (!text) continue;
+    // offsets are in ms
+    const startMs = seg.offsets?.from ?? 0;
+    const endMs = seg.offsets?.to ?? startMs;
+    words.push({
+      text,
+      start: startMs / 1000,
+      end: endMs / 1000,
+    });
+  }
+
+  // Cleanup tmp WAV but keep dir for debugging
+  try { fs.unlinkSync(wavPath); } catch {}
+
+  return {
+    words,
+    gpuUsed: gpuWorked,
+    diag: {
+      backend: diag.backend,
+      gpuDevice: diag.gpuDevice,
+      elapsedMs: diag.elapsedMs,
+      encodeMs: diag.encodeMs,
+    },
+  };
+});
+
+// ─── SHARED RENDER FUNCTION ─────────────────────────────────────────────
+// quality: 'standard' (CRF 20) or 'intermediate' (CRF 12, slow preset)
+function renderVideo({ videoPath, captions, shapes, style, videoSize, outPath, quality }) {
+  // Build ASS subtitle file
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'caphi-export-'));
+  const assPath = path.join(tmpDir, 'subs.ass');
+  fs.writeFileSync(assPath, buildAss(captions, style, videoSize), 'utf-8');
+
+  const escAss = assPath.replace(/\\/g, '/').replace(/:/g, '\\:');
+  const filters = [];
+  filters.push(`subtitles='${escAss}'`);
+
+  for (const s of shapes || []) {
+    const enable = `between(t,${s.start.toFixed(3)},${s.end.toFixed(3)})`;
+    const color = hexToFfColor(s.color, s.opacity ?? 1);
+    if (s.type === 'rect' || s.type === 'circle') {
+      filters.push(
+        `drawbox=x=${Math.round(s.x)}:y=${Math.round(s.y)}:w=${Math.round(s.w)}:h=${Math.round(s.h)}:` +
+        `color=${color}:t=${s.filled ? 'fill' : Math.max(1, s.stroke || 2)}:enable='${enable}'`
+      );
+    } else if (s.type === 'line') {
+      filters.push(
+        `drawbox=x=${Math.round(s.x)}:y=${Math.round(s.y)}:w=${Math.round(s.w)}:h=${Math.max(1, s.h)}:` +
+        `color=${color}:t=fill:enable='${enable}'`
+      );
+    }
+  }
+
+  const filterChain = filters.join(',');
+
+  // Quality presets
+  const crf = quality === 'intermediate' ? '12' : '20';
+  const preset = quality === 'intermediate' ? 'slow' : 'medium';
+
+  return new Promise((resolve, reject) => {
+    const args = [
+      '-y', '-i', videoPath,
+      '-vf', filterChain,
+      '-c:v', 'libx264', '-preset', preset, '-crf', crf,
+      '-pix_fmt', 'yuv420p',
+      '-c:a', 'aac', '-b:a', '256k',
+      outPath,
+    ];
+
+    const proc = spawn(FFMPEG, args, { windowsHide: true });
+    let stderr = '';
+    proc.stderr.on('data', d => {
+      stderr += d.toString();
+      const m = d.toString().match(/time=(\d+):(\d+):(\d+\.?\d*)/);
+      if (m && mainWindow) {
+        const sec = parseInt(m[1], 10) * 3600 + parseInt(m[2], 10) * 60 + parseFloat(m[3]);
+        mainWindow.webContents.send('export-progress', sec);
+      }
+    });
+    proc.on('close', (code) => {
+      if (code === 0) resolve({ outPath });
+      else reject(new Error(`ffmpeg failed (exit ${code})\n${stderr.slice(-800)}`));
+    });
+    proc.on('error', reject);
+  });
 }
 
-function formatASSTime(seconds) {
+// ─── EXPORT VIDEO ───────────────────────────────────────────────────────
+ipcMain.handle('export-video', async (_e, payload) => {
+  return renderVideo({ ...payload, quality: 'standard' });
+});
+
+// ─── SEND TO MEDIA ENCODER ──────────────────────────────────────────────
+// Burns a high-quality intermediate (CRF 12), then opens it in Adobe Media Encoder
+ipcMain.handle('send-to-media-encoder', async (_e, payload) => {
+  // 1. Render high-quality intermediate
+  const intermediatePath = payload.outPath;
+  await renderVideo({ ...payload, quality: 'intermediate' });
+
+  // 2. Locate Adobe Media Encoder
+  const amePath = findMediaEncoder();
+  if (!amePath) {
+    return {
+      ok: false,
+      intermediatePath,
+      error: 'Adobe Media Encoder not found in common install locations. The intermediate file was created — you can open it in AME manually.',
+    };
+  }
+
+  // 3. Launch AME with the intermediate file
+  return new Promise((resolve) => {
+    const proc = spawn(amePath, [intermediatePath], {
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: false,
+    });
+    proc.on('error', (err) => {
+      resolve({ ok: false, intermediatePath, error: 'Failed to launch AME: ' + err.message });
+    });
+    proc.unref();
+    // Give it a moment to fail-fast on spawn errors
+    setTimeout(() => resolve({ ok: true, intermediatePath, amePath }), 500);
+  });
+});
+
+// Search common Adobe Media Encoder install paths (newest year first)
+function findMediaEncoder() {
+  const bases = [
+    process.env['ProgramFiles'] || 'C:\\Program Files',
+    process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)',
+  ];
+  const candidates = [];
+  for (const base of bases) {
+    const adobeDir = path.join(base, 'Adobe');
+    if (!fs.existsSync(adobeDir)) continue;
+    try {
+      const entries = fs.readdirSync(adobeDir)
+        .filter(d => /Adobe Media Encoder/i.test(d))
+        .sort()
+        .reverse(); // newest year first
+      for (const dir of entries) {
+        // exe is usually "Adobe Media Encoder.exe" inside the version folder
+        const exe = path.join(adobeDir, dir, 'Adobe Media Encoder.exe');
+        if (fs.existsSync(exe)) candidates.push(exe);
+        // some versions nest under a subfolder
+        const exe2 = path.join(adobeDir, dir, 'Support Files', 'Adobe Media Encoder.exe');
+        if (fs.existsSync(exe2)) candidates.push(exe2);
+      }
+    } catch {}
+  }
+  return candidates[0] || null;
+}
+
+ipcMain.handle('find-media-encoder', () => {
+  const p = findMediaEncoder();
+  return { found: !!p, path: p };
+});
+
+
+// ─── ASS BUILDER ────────────────────────────────────────────────────────
+function buildAss(captions, style, videoSize) {
+  const { width: W, height: H } = videoSize;
+  const font = style.font || 'Arial';
+  const size = style.size || 48;
+  const baseColor = hexToAssColor(style.baseColor || '#FFFFFF');
+  const highlightColor = hexToAssColor(style.highlightColor || '#FFFF00');
+  const outline = hexToAssColor(style.outlineColor || '#000000');
+  const boxColor = hexToAssColor(style.highlightBoxColor || '#FF0000');
+  const useBox = !!style.highlightBox; // per-word background box behind active word
+  const bold = style.bold ? -1 : 0;
+  const italic = style.italic ? -1 : 0;
+
+  const header = [
+    '[Script Info]',
+    'ScriptType: v4.00+',
+    `PlayResX: ${W}`,
+    `PlayResY: ${H}`,
+    'WrapStyle: 2',
+    'ScaledBorderAndShadow: yes',
+    '',
+    '[V4+ Styles]',
+    'Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding',
+    // Main style: BorderStyle 1 = outline+shadow
+    `Style: Default,${font},${size},${baseColor},${baseColor},${outline},&H80000000,${bold},${italic},0,0,100,100,0,0,1,3,1,5,30,30,30,1`,
+    // Box style: BorderStyle 3 = opaque box (the box IS the highlight background)
+    `Style: Box,${font},${size},${baseColor},${baseColor},${boxColor},${boxColor},${bold},${italic},0,0,100,100,0,0,3,4,0,5,30,30,30,1`,
+    '',
+    '[Events]',
+    'Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text',
+  ].join('\n');
+
+  const events = [];
+  for (const cap of captions || []) {
+    if (!cap.words || cap.words.length === 0) continue;
+
+    const px = Math.round(cap.x ?? W / 2);
+    const py = Math.round(cap.y ?? H - 100);
+
+    for (let i = 0; i < cap.words.length; i++) {
+      const w = cap.words[i];
+
+      // Helper to render one word with the right styling
+      const renderWord = (word, wIdx) => {
+        if (wIdx === i) {
+          if (useBox) {
+            // Wrap active word in opaque box: switch BorderStyle to 3 via \bord + back color.
+            // ASS inline can't switch BorderStyle, so we emulate a box with a thick border
+            // in the box color behind the highlight-colored text.
+            return `{\\c${highlightColor}\\3c${boxColor}\\bord6\\shad0}${escAss(word.text)}{\\c${baseColor}\\3c${outline}\\bord3}`;
+          }
+          return `{\\c${highlightColor}}${escAss(word.text)}{\\c${baseColor}}`;
+        }
+        return escAss(word.text);
+      };
+
+      const parts = [];
+      const lines = (cap.lines && cap.lines.length)
+        ? cap.lines
+        : [cap.words.map((_, idx) => idx)];
+
+      lines.forEach((lineIndices, lineIdx) => {
+        if (lineIdx > 0) parts.push('\\N');
+        lineIndices.forEach((wIdx, j) => {
+          if (j > 0) parts.push(' ');
+          parts.push(renderWord(cap.words[wIdx], wIdx));
+        });
+      });
+
+      const text = `{\\pos(${px},${py})\\an5}` + parts.join('');
+      events.push(
+        `Dialogue: 0,${assTime(w.start)},${assTime(w.end)},Default,,0,0,0,,${text}`
+      );
+    }
+  }
+
+  return header + '\n' + events.join('\n') + '\n';
+}
+
+function escAss(s) {
+  return String(s).replace(/\\/g, '\\\\').replace(/\{/g, '\\{').replace(/\}/g, '\\}');
+}
+
+function assTime(seconds) {
   const h = Math.floor(seconds / 3600);
   const m = Math.floor((seconds % 3600) / 60);
-  const s = (seconds % 60).toFixed(2);
-  const sStr = s.padStart(5, '0');
-  return `${h}:${m.toString().padStart(2,'0')}:${sStr}`;
+  const s = Math.floor(seconds % 60);
+  const cs = Math.floor((seconds * 100) % 100);
+  return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}.${String(cs).padStart(2, '0')}`;
+}
+
+function hexToAssColor(hex) {
+  // ASS uses &HBBGGRR&
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex || '#FFFFFF');
+  if (!m) return '&H00FFFFFF';
+  const r = m[1].substring(0, 2);
+  const g = m[1].substring(2, 4);
+  const b = m[1].substring(4, 6);
+  return `&H00${b}${g}${r}`.toUpperCase();
+}
+
+function hexToFfColor(hex, alpha = 1) {
+  // ffmpeg accepts "0xRRGGBB@0.5" syntax
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex || '#FFFFFF');
+  const rgb = m ? m[1] : 'FFFFFF';
+  return `0x${rgb}@${alpha.toFixed(2)}`;
 }

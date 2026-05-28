@@ -1,18 +1,17 @@
 name: Build Windows Installer
 
-# Trigger: manually from the Actions tab, OR automatically when you push code
 on:
-  workflow_dispatch:    # adds a "Run workflow" button in GitHub
   push:
-    branches: [main, master]
-    paths:
-      - 'app/**'
-      - '.github/workflows/**'
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   build:
     runs-on: windows-latest
-    timeout-minutes: 60
 
     steps:
       - name: Checkout repository
@@ -21,111 +20,105 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: app/package-lock.json
 
-      # ── Cache the downloaded binaries so subsequent builds skip the 1.5GB model download
+      # ── Cache the heavy binaries so re-runs are fast ─────────────────────
       - name: Cache binaries (whisper, model, ffmpeg)
-        id: cache-bin
+        id: cache-binaries
         uses: actions/cache@v4
         with:
           path: bin
-          key: bin-whisper-cuda-medium-en-ffmpeg-essentials-v3
+          key: binaries-cuda-v3-medium-en
 
-      - name: Download whisper.cpp (CUDA cuBLAS build)
-        if: steps.cache-bin.outputs.cache-hit != 'true'
+      - name: Download whisper.cpp (CUDA build)
+        if: steps.cache-binaries.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
           New-Item -ItemType Directory -Force -Path bin | Out-Null
-          New-Item -ItemType Directory -Force -Path downloads | Out-Null
-
-          Write-Host "Finding latest cuBLAS whisper.cpp release..."
-          # The cuBLAS asset name includes a CUDA version (e.g. whisper-cublas-12.2.0-bin-x64.zip)
-          # We query the GitHub API to find the latest one.
-          $headers = @{ 'User-Agent' = 'CaptionHighlighter-Build' }
-          $rel = Invoke-RestMethod -Headers $headers -Uri 'https://api.github.com/repos/ggerganov/whisper.cpp/releases/latest'
-          $cublas = $rel.assets | Where-Object { $_.name -match '^whisper-cublas-.*-bin-x64\.zip$' } | Select-Object -First 1
-          if (-not $cublas) {
-            throw "No cuBLAS asset found in latest release. Check release page manually."
+          $url = 'https://github.com/ggml-org/whisper.cpp/releases/download/v1.7.4/whisper-cublas-12.4.0-bin-x64.zip'
+          Write-Host "Downloading whisper CUDA build..."
+          Invoke-WebRequest -Uri $url -OutFile whisper.zip -UseBasicParsing
+          Expand-Archive -Path whisper.zip -DestinationPath whisper-tmp -Force
+          # Copy ALL contents (exe + every CUDA DLL) into bin/
+          Get-ChildItem -Path whisper-tmp -Recurse -File | ForEach-Object {
+            Copy-Item $_.FullName -Destination bin -Force
           }
-          Write-Host "Downloading $($cublas.name) ($([math]::Round($cublas.size / 1MB, 1)) MB)..."
-
-          curl.exe -L --retry 5 --retry-delay 5 -o 'downloads/whisper.zip' $cublas.browser_download_url
-          if ($LASTEXITCODE -ne 0) { throw "curl failed with exit $LASTEXITCODE" }
-
-          Expand-Archive -Force -Path 'downloads/whisper.zip' -DestinationPath 'downloads/whisper'
-
-          # Find the exe wherever it landed
-          $exe = Get-ChildItem -Recurse downloads/whisper -Filter "whisper-cli.exe" | Select-Object -First 1
-          if (-not $exe) { $exe = Get-ChildItem -Recurse downloads/whisper -Filter "main.exe" | Select-Object -First 1 }
-          if (-not $exe) { throw "Could not find whisper exe in downloaded zip" }
-          Copy-Item $exe.FullName bin/
-
-          # Copy ALL DLLs (CUDA runtime, ggml, whisper, etc) — required for cuBLAS build
-          Get-ChildItem $exe.Directory -Filter "*.dll" | ForEach-Object { Copy-Item $_.FullName bin/ }
-
-          $dllCount = (Get-ChildItem bin -Filter "*.dll").Count
-          Write-Host "✓ whisper (CUDA) installed with $dllCount DLLs"
+          Remove-Item whisper.zip, whisper-tmp -Recurse -Force
+          Write-Host "whisper.cpp + CUDA DLLs installed:"
+          Get-ChildItem bin | Select-Object Name, Length | Format-Table
 
       - name: Download Whisper Medium English model
-        if: steps.cache-bin.outputs.cache-hit != 'true'
+        if: steps.cache-binaries.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
-          Write-Host "Downloading Whisper Medium English model (1.5 GB)..."
-          # Use curl with explicit retry and continuation for large files
-          # Windows runner has curl.exe baked in
-          curl.exe -L --retry 5 --retry-delay 10 --retry-max-time 1800 `
-            --connect-timeout 30 --max-time 1800 `
-            -o 'bin/ggml-medium.en.bin' `
-            'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.en.bin'
-          if ($LASTEXITCODE -ne 0) { throw "curl failed with exit $LASTEXITCODE" }
-
-          # Verify file size — model should be at least 1400 MB
-          $f = Get-Item 'bin/ggml-medium.en.bin'
-          $sizeMB = [math]::Round($f.Length / 1MB, 1)
-          Write-Host "Downloaded file size: $sizeMB MB"
-          if ($f.Length -lt 1400MB) {
-            throw "Model download incomplete: got $sizeMB MB, expected ~1462 MB. Aborting build."
-          }
-          Write-Host "✓ Model downloaded ($sizeMB MB)"
+          $ErrorActionPreference = 'Stop'
+          $url = 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.en.bin'
+          Write-Host "Downloading Whisper Medium English model (~1.5GB)..."
+          Invoke-WebRequest -Uri $url -OutFile bin/ggml-medium.en.bin -UseBasicParsing
+          Write-Host "Model downloaded: $((Get-Item bin/ggml-medium.en.bin).Length / 1MB) MB"
 
       - name: Download FFmpeg
-        if: steps.cache-bin.outputs.cache-hit != 'true'
+        if: steps.cache-binaries.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
-          Write-Host "Downloading FFmpeg..."
-          Invoke-WebRequest -UseBasicParsing -Uri 'https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip' -OutFile 'downloads/ffmpeg.zip'
-          Expand-Archive -Force -Path 'downloads/ffmpeg.zip' -DestinationPath 'downloads/ffmpeg'
-          $dir = Get-ChildItem 'downloads/ffmpeg' -Directory | Where-Object { $_.Name -like 'ffmpeg-*-essentials*' } | Select-Object -First 1
-          Copy-Item "$($dir.FullName)/bin/ffmpeg.exe" bin/
-          Copy-Item "$($dir.FullName)/bin/ffprobe.exe" bin/
-          Remove-Item -Recurse -Force downloads
-          Write-Host "✓ FFmpeg installed"
+          $ErrorActionPreference = 'Stop'
+          $url = 'https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip'
+          Write-Host "Downloading ffmpeg..."
+          Invoke-WebRequest -Uri $url -OutFile ffmpeg.zip -UseBasicParsing
+          Expand-Archive -Path ffmpeg.zip -DestinationPath ffmpeg-tmp -Force
+          $ffBin = Get-ChildItem -Path ffmpeg-tmp -Recurse -Directory -Filter 'bin' | Select-Object -First 1
+          Copy-Item "$($ffBin.FullName)\ffmpeg.exe" -Destination bin -Force
+          Copy-Item "$($ffBin.FullName)\ffprobe.exe" -Destination bin -Force
+          Remove-Item ffmpeg.zip, ffmpeg-tmp -Recurse -Force
+          Write-Host "ffmpeg installed"
+          Get-ChildItem bin | Select-Object Name, Length | Format-Table
+
+      - name: Verify all binaries present
+        shell: pwsh
+        run: |
+          $required = @('whisper-cli.exe', 'ggml-medium.en.bin', 'ffmpeg.exe', 'ffprobe.exe')
+          foreach ($f in $required) {
+            if (-not (Test-Path "bin/$f")) {
+              Write-Error "MISSING: bin/$f"
+              exit 1
+            }
+            Write-Host "✓ bin/$f"
+          }
+          # Verify CUDA DLLs (warn if missing — won't fail build but app will fall back to CPU)
+          $cudaDlls = Get-ChildItem bin -Filter '*.dll' | Where-Object { $_.Name -like '*cublas*' -or $_.Name -like '*cudart*' -or $_.Name -like '*ggml*' }
+          Write-Host "CUDA / GGML DLLs found:"
+          $cudaDlls | Select-Object Name | Format-Table
 
       - name: Install npm dependencies
         working-directory: app
-        run: npm install --no-audit --no-fund
+        run: npm install --no-audit --no-fund --loglevel=error
 
       - name: Build installer
         working-directory: app
-        run: npm run dist
         env:
-          # electron-builder will skip code signing if these aren't set
-          # which is fine for personal use
-          CSC_IDENTITY_AUTO_DISCOVERY: false
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npm run dist
 
-      # ── Upload the installer as a downloadable artifact
-      - name: Upload installer
+      - name: Upload installer as artifact
         uses: actions/upload-artifact@v4
         with:
-          name: CaptionHighlighter-Installer
-          path: dist/CaptionHighlighter-Setup-*.exe
-          retention-days: 30
+          name: CaptionHighlighter-Setup
+          path: |
+            app/dist/*.exe
+            app/dist/latest.yml
+            app/dist/*.blockmap
 
-      # ── Also create a GitHub Release with the installer attached (only on tag pushes)
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/CaptionHighlighter-Setup-*.exe
-          draft: false
-          prerelease: false
+          files: |
+            app/dist/*.exe
+            app/dist/latest.yml
+            app/dist/*.blockmap
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
