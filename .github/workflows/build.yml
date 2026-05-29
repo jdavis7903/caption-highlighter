@@ -30,36 +30,51 @@ jobs:
         uses: actions/cache@v4
         with:
           path: bin
-          key: binaries-cuda-v3-medium-en
+          key: binaries-vulkan-v1-medium-en
 
-      - name: Download whisper.cpp (CUDA build)
+      - name: Install Vulkan SDK
+        if: steps.cache-binaries.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Write-Host "Installing Vulkan SDK..."
+          # Use the official LunarG SDK installer (silent install)
+          $sdkUrl = 'https://sdk.lunarg.com/sdk/download/latest/windows/vulkan-sdk.exe'
+          Invoke-WebRequest -Uri $sdkUrl -OutFile vulkan-sdk.exe -UseBasicParsing
+          Start-Process -FilePath .\vulkan-sdk.exe -ArgumentList '--accept-licenses','--default-answer','--confirm-command','install' -Wait
+          # Find the install dir and expose VULKAN_SDK for CMake
+          $vkRoot = Get-ChildItem 'C:\VulkanSDK' -Directory | Sort-Object Name -Descending | Select-Object -First 1
+          if (-not $vkRoot) { throw "Vulkan SDK install dir not found under C:\VulkanSDK" }
+          Write-Host "VULKAN_SDK = $($vkRoot.FullName)"
+          "VULKAN_SDK=$($vkRoot.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Remove-Item vulkan-sdk.exe -Force
+
+      - name: Build whisper.cpp with Vulkan
         if: steps.cache-binaries.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           New-Item -ItemType Directory -Force -Path bin | Out-Null
-          $url = 'https://github.com/ggml-org/whisper.cpp/releases/download/v1.8.4/whisper-cublas-12.4.0-bin-x64.zip'
-          Write-Host "Downloading whisper CUDA build..."
-          Invoke-WebRequest -Uri $url -OutFile whisper.zip -UseBasicParsing
-          Expand-Archive -Path whisper.zip -DestinationPath whisper-tmp -Force
-          # Copy ALL contents (exe + every CUDA DLL) into bin/
-          Get-ChildItem -Path whisper-tmp -Recurse -File | ForEach-Object {
+          Write-Host "Cloning whisper.cpp v1.8.4..."
+          git clone --depth 1 --branch v1.8.4 https://github.com/ggml-org/whisper.cpp.git whisper-src
+          Push-Location whisper-src
+          Write-Host "Configuring with Vulkan..."
+          cmake -B build -DGGML_VULKAN=ON -DCMAKE_BUILD_TYPE=Release -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_EXAMPLES=ON
+          Write-Host "Building (Release)..."
+          # Build everything (don't target a single name — it varies by version).
+          # MSBuild parallelism is passed via -- /m rather than -j.
+          cmake --build build --config Release -- /m
+          Pop-Location
+          # Locate the CLI exe (named whisper-cli.exe in modern builds; main.exe older)
+          $exe = Get-ChildItem -Path whisper-src/build -Recurse -Include 'whisper-cli.exe','main.exe' -File | Select-Object -First 1
+          if (-not $exe) { throw "Build did not produce a whisper CLI executable" }
+          # Copy exe (normalize name to whisper-cli.exe) + every produced DLL into bin/
+          Copy-Item $exe.FullName -Destination 'bin/whisper-cli.exe' -Force
+          Get-ChildItem -Path whisper-src/build -Recurse -Include '*.dll' -File | ForEach-Object {
             Copy-Item $_.FullName -Destination bin -Force
           }
-          Remove-Item whisper.zip, whisper-tmp -Recurse -Force
-          # Ensure whisper-cli.exe exists. Older builds shipped main.exe; some ship whisper.exe.
-          if (-not (Test-Path bin/whisper-cli.exe)) {
-            if (Test-Path bin/main.exe) {
-              Copy-Item bin/main.exe bin/whisper-cli.exe -Force
-              Write-Host "Aliased main.exe -> whisper-cli.exe"
-            } elseif (Test-Path bin/whisper.exe) {
-              Copy-Item bin/whisper.exe bin/whisper-cli.exe -Force
-              Write-Host "Aliased whisper.exe -> whisper-cli.exe"
-            } else {
-              Write-Host "WARNING: no recognizable whisper executable found in zip!"
-            }
-          }
-          Write-Host "whisper.cpp + CUDA DLLs installed:"
+          Remove-Item whisper-src -Recurse -Force
+          Write-Host "whisper.cpp (Vulkan) built and installed:"
           Get-ChildItem bin | Select-Object Name, Length | Format-Table
 
       - name: Download Whisper Medium English model
@@ -68,9 +83,26 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $url = 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.en.bin'
+          $dest = 'bin/ggml-medium.en.bin'
           Write-Host "Downloading Whisper Medium English model (~1.5GB)..."
-          Invoke-WebRequest -Uri $url -OutFile bin/ggml-medium.en.bin -UseBasicParsing
-          Write-Host "Model downloaded: $((Get-Item bin/ggml-medium.en.bin).Length / 1MB) MB"
+          $maxAttempts = 3
+          for ($i = 1; $i -le $maxAttempts; $i++) {
+            try {
+              # Use BITS-free direct download with a generous timeout
+              Invoke-WebRequest -Uri $url -OutFile $dest -UseBasicParsing -TimeoutSec 1800
+              $sizeMB = (Get-Item $dest).Length / 1MB
+              if ($sizeMB -lt 1000) {
+                throw "Downloaded file too small ($([math]::Round($sizeMB))MB) — likely incomplete."
+              }
+              Write-Host "Model downloaded: $([math]::Round($sizeMB)) MB"
+              break
+            } catch {
+              Write-Host "Attempt $i failed: $($_.Exception.Message)"
+              if (Test-Path $dest) { Remove-Item $dest -Force }
+              if ($i -eq $maxAttempts) { throw "Model download failed after $maxAttempts attempts." }
+              Start-Sleep -Seconds 10
+            }
+          }
 
       - name: Download FFmpeg
         if: steps.cache-binaries.outputs.cache-hit != 'true'
@@ -99,10 +131,10 @@ jobs:
             }
             Write-Host "✓ bin/$f"
           }
-          # Verify CUDA DLLs (warn if missing — won't fail build but app will fall back to CPU)
-          $cudaDlls = Get-ChildItem bin -Filter '*.dll' | Where-Object { $_.Name -like '*cublas*' -or $_.Name -like '*cudart*' -or $_.Name -like '*ggml*' }
-          Write-Host "CUDA / GGML DLLs found:"
-          $cudaDlls | Select-Object Name | Format-Table
+          # List the ggml/Vulkan DLLs that were built alongside the exe
+          $dlls = Get-ChildItem bin -Filter '*.dll'
+          Write-Host "DLLs shipped in bin/:"
+          $dlls | Select-Object Name | Format-Table
 
       - name: Install npm dependencies
         working-directory: app

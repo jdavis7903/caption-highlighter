@@ -27,7 +27,7 @@
   }
   .app {
     display: grid;
-    grid-template-columns: 1fr 340px;
+    grid-template-columns: 380px 1fr;
     grid-template-rows: auto 1fr;
     height: 100vh;
   }
@@ -55,12 +55,14 @@
   .update-pill.visible { display: inline-block; }
   .update-pill:hover { background: var(--accent-hover); }
 
-  /* MAIN AREA */
+  /* MAIN AREA (right column) */
   .main {
     display: flex;
     flex-direction: column;
     overflow: hidden;
     min-height: 0;
+    grid-column: 2;
+    grid-row: 2;
   }
   .video-area {
     flex: 1 1 0;
@@ -142,19 +144,23 @@
 
   .controls-bar {
     background: var(--panel);
-    border-top: 1px solid var(--border);
-    padding: 8px 12px;
+    border-bottom: 1px solid var(--border);
+    padding: 12px;
     display: flex;
-    align-items: center;
-    gap: 12px;
-    flex-wrap: wrap;
+    flex-direction: column;
+    gap: 8px;
     flex-shrink: 0;
+  }
+  .ctl-row { display: flex; gap: 8px; }
+  .ctl-row button { flex: 1; }
+  .controls-bar > button {
+    width: 100%;
   }
   .controls-bar button {
     background: var(--panel-2);
     color: var(--text);
     border: 1px solid var(--border);
-    padding: 6px 14px;
+    padding: 8px 14px;
     border-radius: 4px;
     cursor: pointer;
     font-size: 12px;
@@ -187,18 +193,16 @@
     display: none;
     align-items: center;
     gap: 8px;
-    flex: 1;
-    min-width: 120px;
+    width: 100%;
   }
   .progress-wrap.visible { display: flex; }
   .status-label {
     font-size: 11px;
     color: var(--text-dim);
-    margin-left: auto;
-    white-space: nowrap;
+    width: 100%;
     overflow: hidden;
     text-overflow: ellipsis;
-    max-width: 40%;
+    white-space: nowrap;
   }
   .controls-bar button.primary:hover:not(:disabled) { background: var(--accent-hover); }
 
@@ -249,28 +253,36 @@
     cursor: text;
   }
 
-  /* SIDEBAR */
+  /* SIDEBAR (left column) */
   .sidebar {
     background: var(--panel);
-    border-left: 1px solid var(--border);
+    border-right: 1px solid var(--border);
     overflow-y: auto;
+    grid-column: 1;
     grid-row: 2;
     min-height: 0;
+    display: flex;
+    flex-direction: column;
   }
   .tab-bar {
     display: flex;
     border-bottom: 1px solid var(--border);
     background: var(--bg);
+    position: sticky;
+    top: 0;
+    z-index: 5;
+    flex-shrink: 0;
   }
   .tab {
     flex: 1;
-    padding: 10px;
+    padding: 10px 4px;
     text-align: center;
     cursor: pointer;
-    font-size: 12px;
+    font-size: 11px;
     color: var(--text-dim);
     border-bottom: 2px solid transparent;
     transition: color 0.12s, background 0.12s;
+    white-space: nowrap;
   }
   .tab:hover { color: var(--text); background: var(--panel-2); }
   .tab.active {
@@ -438,31 +450,22 @@
     </div>
   </div>
 
-  <div class="main">
-    <div class="video-area">
-      <div class="drop-zone" id="dropZone">
-        <div style="font-size:40px;margin-bottom:12px;">📹</div>
-        <div style="font-size:15px;color:var(--text);margin-bottom:6px;">Drop a video here, or click to browse</div>
-        <div style="font-size:11px;">Supports MP4, MOV, MKV, AVI, WebM, M4V</div>
-        <div style="font-size:11px;margin-top:16px;opacity:0.7;">Shortcuts: Space = play/pause · ← → = seek · F = fullscreen</div>
-      </div>
-      <div class="video-wrap" id="videoWrap" style="display:none;">
-        <video id="videoEl" controls></video>
-        <div class="overlay" id="overlay"></div>
-      </div>
-    </div>
-
+  <!-- LEFT COLUMN: all controls + menus -->
+  <div class="sidebar">
     <div class="controls-bar">
       <button id="transcribeBtn" class="primary" disabled title="Transcribe the audio to generate word-timed captions">Transcribe Audio</button>
-      <span class="ctl-sep"></span>
-      <button id="exportBtn" disabled title="Render a finished MP4 with captions and shapes burned in">Export Video</button>
-      <button id="mediaEncoderBtn" disabled title="Render a high-quality intermediate and open it in Adobe Media Encoder">Send to Media Encoder</button>
-      <span class="ctl-sep"></span>
-      <button id="fullscreenBtn" disabled title="Preview the captions full screen">Fullscreen</button>
-      <button id="newVideoBtn" disabled title="Load a different video (clears current work)">Load Video</button>
-      <span class="ctl-sep"></span>
-      <button id="showFolderBtn" disabled title="Reveal the exported file in Explorer">Show in Folder</button>
-      <button id="openVideoBtn" disabled title="Open the exported file in your default player">Open Output</button>
+      <div class="ctl-row">
+        <button id="exportBtn" disabled title="Render a finished MP4 with captions and shapes burned in">Export Video</button>
+        <button id="mediaEncoderBtn" disabled title="Render a high-quality intermediate and open it in Adobe Media Encoder">Media Encoder</button>
+      </div>
+      <div class="ctl-row">
+        <button id="fullscreenBtn" disabled title="Preview the captions full screen">Fullscreen</button>
+        <button id="newVideoBtn" disabled title="Load a different video (clears current work)">Load Video</button>
+      </div>
+      <div class="ctl-row">
+        <button id="showFolderBtn" disabled title="Reveal the exported file in Explorer">Show in Folder</button>
+        <button id="openVideoBtn" disabled title="Open the exported file in your default player">Open Output</button>
+      </div>
       <div class="progress-wrap" id="progressWrap">
         <div class="progress-bar" id="progressBar"><div class="progress-fill" id="progressFill"></div></div>
         <span class="progress-label" id="progressLabel">0%</span>
@@ -470,18 +473,11 @@
       <span id="statusLabel" class="status-label"></span>
     </div>
 
-    <div class="transcript-area" id="transcriptArea" style="display:none;">
-      <h3>Transcript <span style="float:right;font-size:10px;">click=seek · dbl-click=edit · shift-click=line break · right-click=menu</span></h3>
-      <div id="transcriptWords"></div>
-    </div>
-  </div>
-
-  <div class="sidebar">
     <div class="tab-bar">
       <div class="tab active" data-tab="captions">Captions</div>
       <div class="tab" data-tab="shapes">Shapes<span id="shapeCount" class="tab-badge"></span></div>
       <div class="tab" data-tab="output">Output</div>
-      <div class="tab" data-tab="diag">Diagnostics</div>
+      <div class="tab" data-tab="diag">Diag</div>
       <div class="tab" data-tab="settings">Settings</div>
     </div>
 
@@ -616,7 +612,7 @@
         <label>Transcription mode</label>
         <select id="gpuMode">
           <option value="auto">Auto (try GPU, fall back to CPU)</option>
-          <option value="gpu">Force GPU (CUDA) — fail if unavailable</option>
+          <option value="gpu">Force GPU (Vulkan) — fail if unavailable</option>
           <option value="cpu">Force CPU</option>
         </select>
       </div>
@@ -671,6 +667,26 @@
       </details>
     </div>
   </div>
+
+  <!-- RIGHT COLUMN: video preview + transcript -->
+  <div class="main">
+    <div class="video-area">
+      <div class="drop-zone" id="dropZone">
+        <div style="font-size:40px;margin-bottom:12px;">📹</div>
+        <div style="font-size:15px;color:var(--text);margin-bottom:6px;">Drop a video here, or click to browse</div>
+        <div style="font-size:11px;">Supports MP4, MOV, MKV, AVI, WebM, M4V</div>
+        <div style="font-size:11px;margin-top:16px;opacity:0.7;">Shortcuts: Space = play/pause · ← → = seek · F = fullscreen</div>
+      </div>
+      <div class="video-wrap" id="videoWrap" style="display:none;">
+        <video id="videoEl" controls></video>
+        <div class="overlay" id="overlay"></div>
+      </div>
+    </div>
+    <div class="transcript-area" id="transcriptArea" style="display:none;">
+      <h3>Transcript <span style="float:right;font-size:10px;">click=seek · <b style="color:var(--accent)">shift-click=line break</b> · dbl-click=edit · right-click=menu</span></h3>
+      <div id="transcriptWords"></div>
+    </div>
+  </div>
 </div>
 
 <div class="ctx-menu" id="ctxMenu"></div>
@@ -690,12 +706,19 @@ const state = {
   videoPath: null,
   videoSize: { width: 1920, height: 1080 },
   words: [],           // {text, start, end}
-  captions: [],        // {id, words:[{text,start,end}], lines:[[wIdx,...]], x, y, start, end}
+  captions: [],        // {id, words:[{text,start,end}], lines:[[wIdx,...]], start, end}
+  captionPos: null,    // {x, y} shared by ALL captions; null = use centered default
   shapes: [],          // {id, type, x, y, w, h, color, opacity, filled, stroke, start, end}
   selectedCaption: null,
   selectedShape: null,
   lastOutputPath: null,
 };
+
+// The position every caption uses. Defaults to horizontal center, lower third.
+function captionPosition() {
+  if (state.captionPos) return state.captionPos;
+  return { x: state.videoSize.width / 2, y: state.videoSize.height / 2 };
+}
 
 const $ = (id) => document.getElementById(id);
 
@@ -711,10 +734,11 @@ document.addEventListener('mousemove', (e) => {
   const dx = (e.clientX - d.startX) / d.scaleX;
   const dy = (e.clientY - d.startY) / d.scaleY;
   if (d.kind === 'caption') {
-    d.target.x = d.origX + dx;
-    d.target.y = d.origY + dy;
-    d.el.style.left = (d.offsetX + d.target.x * d.scaleX) + 'px';
-    d.el.style.top = (d.offsetY + d.target.y * d.scaleY) + 'px';
+    // Update the single shared caption position (all captions follow it).
+    const nx = d.origX + dx, ny = d.origY + dy;
+    state.captionPos = { x: nx, y: ny };
+    d.el.style.left = (d.offsetX + nx * d.scaleX) + 'px';
+    d.el.style.top = (d.offsetY + ny * d.scaleY) + 'px';
   } else if (d.kind === 'shape') {
     const s = d.target;
     if (d.mode === 'move') {
@@ -734,13 +758,7 @@ document.addEventListener('mousemove', (e) => {
   }
 });
 
-document.addEventListener('mouseup', () => {
-  if (activeDrag && activeDrag.kind === 'caption' && activeDrag.target) {
-    // Flag this caption as user-positioned so regrouping preserves its location.
-    activeDrag.target.moved = true;
-  }
-  activeDrag = null;
-});
+document.addEventListener('mouseup', () => { activeDrag = null; });
 
 // ─── DROP / PICK ─────────────────────────────────────────────────────────
 const dropZone = $('dropZone');
@@ -807,7 +825,7 @@ $('transcribeBtn').addEventListener('click', async () => {
     if (result.diag) {
       const d = result.diag;
       $('diagBackend').textContent = d.backend;
-      $('diagBackend').style.color = d.backend === 'CUDA' ? 'var(--success)' : 'var(--text)';
+      $('diagBackend').style.color = d.backend === 'Vulkan' ? 'var(--success)' : 'var(--text)';
       $('diagDevice').textContent = d.gpuDevice || '(none)';
       $('diagTime').textContent = (d.elapsedMs / 1000).toFixed(1) + 's';
       const vidDur = $('videoEl').duration || 0;
@@ -815,7 +833,7 @@ $('transcribeBtn').addEventListener('click', async () => {
         $('diagSpeed').textContent = (vidDur / (d.elapsedMs / 1000)).toFixed(1) + '×';
       }
     }
-    setStatus(result.gpuUsed ? '✓ Transcribed (GPU/CUDA)' : '✓ Transcribed (CPU)');
+    setStatus(result.gpuUsed ? '✓ Transcribed (GPU/Vulkan)' : '✓ Transcribed (CPU)');
   } catch (e) {
     alert('Transcription failed:\n' + e.message);
     setStatus('✗ Transcription failed');
@@ -845,14 +863,6 @@ window.api.onTranscribeDebug((msg) => {
 function groupWordsIntoCaptions(words) {
   const target = parseInt($('wordsPerCap').value, 10) || 6;
   const maxLines = parseInt($('linesPerCap').value, 10) || 2;
-  const W = state.videoSize.width;
-  const H = state.videoSize.height;
-  const defaultX = W / 2, defaultY = H - 100;
-
-  // Remember previously customized positions so edits don't reset a dragged caption.
-  // Keyed by the caption's start time (rounded); we match the new caption whose
-  // start is closest. moved=true marks captions the user actually dragged.
-  const prevMoved = (state.captions || []).filter(c => c.moved);
 
   const captions = [];
   let cur = [];
@@ -865,22 +875,11 @@ function groupWordsIntoCaptions(words) {
     const tooLong = cur.length >= target && (punct || cur.length >= target + 2);
     const tooFar = words[i].end - curStart > 3.0;
     if (tooLong || tooFar || i === words.length - 1) {
-      const lines = wrapIntoLines(cur, maxLines);
-      const startT = cur[0].start;
-      // Inherit a dragged position from the nearest previous moved caption (within 0.5s)
-      let x = defaultX, y = defaultY, moved = false;
-      let best = null, bestDist = Infinity;
-      for (const pm of prevMoved) {
-        const dist = Math.abs(pm.start - startT);
-        if (dist < bestDist) { bestDist = dist; best = pm; }
-      }
-      if (best && bestDist <= 0.5) { x = best.x; y = best.y; moved = true; }
       captions.push({
         id: 'cap_' + captions.length,
         words: cur.slice(),
-        lines,
-        x, y, moved,
-        start: startT,
+        lines: wrapIntoLines(cur, maxLines),
+        start: cur[0].start,
         end: cur[cur.length - 1].end,
       });
       cur = [];
@@ -926,8 +925,19 @@ function renderTranscript() {
     span.className = 'transcript-word';
     span.dataset.index = i;
     span.textContent = w.text;
+    span.addEventListener('mousedown', (e) => {
+      // Prevent the browser from starting a text selection on shift-click,
+      // which would otherwise swallow the click and select a range of words.
+      if (e.shiftKey) e.preventDefault();
+    });
     span.addEventListener('click', (e) => {
-      if (e.shiftKey) { toggleBreak(i); return; }
+      if (e.shiftKey) {
+        e.preventDefault();
+        toggleBreak(i);
+        const on = state.words[i]?.breakAfter;
+        setStatus(on ? `Line break added after "${w.text}"` : `Line break removed after "${w.text}"`);
+        return;
+      }
       $('videoEl').currentTime = w.start;
       $('videoEl').play();
     });
@@ -939,13 +949,22 @@ function renderTranscript() {
     wrap.appendChild(span);
     if (w.breakAfter) {
       const brk = document.createElement('span');
-      brk.textContent = ' ↵ ';
-      brk.style.color = 'var(--accent)';
-      brk.style.fontWeight = 'bold';
-      brk.title = 'Line break';
+      brk.textContent = ' ↵';
+      brk.style.cssText = 'color:var(--accent);font-weight:bold;cursor:pointer;padding:0 2px;border-radius:2px;';
+      brk.title = 'Line break here — click to remove';
+      brk.addEventListener('mouseenter', () => { brk.style.background = 'rgba(74,158,255,0.2)'; });
+      brk.addEventListener('mouseleave', () => { brk.style.background = 'transparent'; });
+      brk.addEventListener('click', (e) => {
+        e.stopPropagation();
+        toggleBreak(i);
+        setStatus(`Line break removed after "${w.text}"`);
+      });
       wrap.appendChild(brk);
+      // Visually drop to next line in the transcript so breaks are obvious
+      wrap.appendChild(document.createElement('br'));
+    } else {
+      wrap.appendChild(document.createTextNode(' '));
     }
-    wrap.appendChild(document.createTextNode(' '));
   });
 }
 
@@ -1023,6 +1042,11 @@ function insertWordAt(idx, where) {
 
 function toggleBreak(idx) {
   if (!state.words[idx]) return;
+  // A break after the very last word has no effect (nothing follows it).
+  if (idx === state.words.length - 1) {
+    setStatus('Cannot add a line break after the last word.');
+    return;
+  }
   state.words[idx].breakAfter = !state.words[idx].breakAfter;
   state.captions = groupWordsIntoCaptions(state.words);
   renderTranscript();
@@ -1032,7 +1056,8 @@ function toggleBreak(idx) {
 function mergeWords(idx) {
   if (idx >= state.words.length - 1) return;
   const a = state.words[idx], b = state.words[idx + 1];
-  state.words[idx] = { text: a.text + b.text, start: a.start, end: b.end };
+  // Merged word inherits B's trailing break (the boundary that survives the merge).
+  state.words[idx] = { text: a.text + b.text, start: a.start, end: b.end, breakAfter: b.breakAfter };
   state.words.splice(idx + 1, 1);
   state.captions = groupWordsIntoCaptions(state.words);
   renderTranscript();
@@ -1044,7 +1069,13 @@ function splitWord(idx) {
   const parts = w.text.split(/\s+/).filter(Boolean);
   if (parts.length < 2) return;
   const dur = (w.end - w.start) / parts.length;
-  const newWords = parts.map((t, i) => ({ text: t, start: w.start + dur * i, end: w.start + dur * (i + 1) }));
+  const newWords = parts.map((t, i) => ({
+    text: t,
+    start: w.start + dur * i,
+    end: w.start + dur * (i + 1),
+    // Only the final piece keeps the original word's trailing break.
+    breakAfter: (i === parts.length - 1) ? w.breakAfter : false,
+  }));
   state.words.splice(idx, 1, ...newWords);
   state.captions = groupWordsIntoCaptions(state.words);
   renderTranscript();
@@ -1094,11 +1125,12 @@ function renderOverlay() {
 
 function renderCaptionBox(cap, scaleX, scaleY, offsetX = 0, offsetY = 0) {
   const overlay = $('overlay');
+  const pos = captionPosition();
   const div = document.createElement('div');
   div.className = 'caption-box';
   if (state.selectedCaption === cap.id) div.classList.add('selected');
-  div.style.left = (offsetX + cap.x * scaleX) + 'px';
-  div.style.top = (offsetY + cap.y * scaleY) + 'px';
+  div.style.left = (offsetX + pos.x * scaleX) + 'px';
+  div.style.top = (offsetY + pos.y * scaleY) + 'px';
   div.style.fontFamily = $('fontSelect').value || 'Arial';
   div.style.fontSize = ($('fontSize').value * scaleY * 0.5) + 'px';
   div.style.fontWeight = $('boldCheck').checked ? 'bold' : 'normal';
@@ -1112,6 +1144,7 @@ function renderCaptionBox(cap, scaleX, scaleY, offsetX = 0, offsetY = 0) {
   const lineDivs = lines.map(lineIdxs => {
     return lineIdxs.map(wi => {
       const w = cap.words[wi];
+      if (!w) return '';  // guard against stale line indices after edits
       const highlighted = t >= w.start && t <= w.end;
       const color = highlighted ? $('highlightColor').value : $('baseColor').value;
       if (highlighted && $('highlightBoxCheck').checked) {
@@ -1130,12 +1163,13 @@ function renderCaptionBox(cap, scaleX, scaleY, offsetX = 0, offsetY = 0) {
     e.preventDefault();  // prevent text selection during drag
     state.selectedCaption = cap.id;
     state.selectedShape = null;
+    const pos = captionPosition();
     activeDrag = {
       kind: 'caption',
       target: cap,
       el: div,
       startX: e.clientX, startY: e.clientY,
-      origX: cap.x, origY: cap.y,
+      origX: pos.x, origY: pos.y,
       scaleX, scaleY, offsetX, offsetY,
     };
   });
@@ -1344,10 +1378,13 @@ function deleteShape(id) {
     const s = state.shapes.find(x => x.id === state.selectedShape);
     if (!s) return;
     s.color = $('shapeColor').value;
-    s.opacity = parseFloat($('shapeOpacity').value);
+    const op = parseFloat($('shapeOpacity').value);
+    s.opacity = Number.isFinite(op) ? Math.min(1, Math.max(0, op)) : 1;
     s.filled = $('shapeFilled').checked;
-    s.start = parseFloat($('shapeStart').value);
-    s.end = parseFloat($('shapeEnd').value);
+    const st = parseFloat($('shapeStart').value);
+    const en = parseFloat($('shapeEnd').value);
+    s.start = Number.isFinite(st) ? Math.max(0, st) : 0;
+    s.end = Number.isFinite(en) ? en : s.start + 3;
     renderShapeList();
     renderOverlay();
   });
@@ -1404,6 +1441,12 @@ function updateSizeUI() {
 $('exportSize').addEventListener('change', updateSizeUI);
 ['customWidth', 'customHeight'].forEach(id => $(id).addEventListener('input', updateSizeUI));
 
+// Returns captions with the shared position stamped onto each, for export.
+function captionsForExport() {
+  const pos = captionPosition();
+  return state.captions.map(c => ({ ...c, x: pos.x, y: pos.y }));
+}
+
 $('exportBtn').addEventListener('click', async () => {
   const baseName = state.videoPath.split(/[\\/]/).pop().replace(/\.[^.]+$/, '');
   const outPath = await window.api.pickSavePath(baseName + '_captioned.mp4');
@@ -1415,7 +1458,7 @@ $('exportBtn').addEventListener('click', async () => {
   try {
     await window.api.exportVideo({
       videoPath: state.videoPath,
-      captions: state.captions,
+      captions: captionsForExport(),
       shapes: state.shapes,
       style: buildStyle(),
       videoSize: state.videoSize,
@@ -1447,7 +1490,7 @@ $('mediaEncoderBtn').addEventListener('click', async () => {
   try {
     const result = await window.api.sendToMediaEncoder({
       videoPath: state.videoPath,
-      captions: state.captions,
+      captions: captionsForExport(),
       shapes: state.shapes,
       style: buildStyle(),
       videoSize: state.videoSize,
@@ -1497,6 +1540,7 @@ function resetForNewVideo() {
   state.words = [];
   state.captions = [];
   state.shapes = [];
+  state.captionPos = null;  // back to centered default
   state.selectedCaption = null;
   state.selectedShape = null;
   state.lastOutputPath = null;

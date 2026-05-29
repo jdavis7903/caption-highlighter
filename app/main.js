@@ -333,12 +333,12 @@ ipcMain.handle('transcribe', async (_e, videoPath, opts = {}) => {
   });
 
   // Run whisper-cli with GPU + flash-attn
-  // CRITICAL: cwd MUST be BIN_DIR so the CUDA DLLs resolve
+  // CRITICAL: cwd MUST be BIN_DIR so the Vulkan/ggml DLLs resolve
   const outBase = path.join(tmpDir, 'audio');
 
   // Diagnostics collected from whisper's own stderr output
   const diag = {
-    backend: 'unknown',     // 'CUDA' | 'CPU' | 'unknown'
+    backend: 'unknown',     // 'Vulkan' | 'CPU' | 'unknown'
     backendLine: '',
     gpuDevice: '',
     elapsedMs: 0,
@@ -358,9 +358,10 @@ ipcMain.handle('transcribe', async (_e, videoPath, opts = {}) => {
       '--print-progress',
     ];
     if (useGpu) {
-      args.push('-fa'); // flash attention (GPU)
+      // Vulkan build uses the GPU by default; -fa (flash attention) still helps.
+      args.push('-fa');
     } else {
-      args.push('-ng'); // no GPU
+      args.push('-ng'); // no GPU (CPU only)
     }
 
     dbg(`> whisper-cli ${args.join(' ')}`);
@@ -373,7 +374,7 @@ ipcMain.handle('transcribe', async (_e, videoPath, opts = {}) => {
     });
     let stderr = '';
     let stdout = '';
-    let sawCuda = false;
+    let sawGpu = false;
 
     proc.stdout.on('data', d => {
       const text = d.toString();
@@ -391,20 +392,19 @@ ipcMain.handle('transcribe', async (_e, videoPath, opts = {}) => {
       // Forward each line to the debug panel
       text.split(/\r?\n/).forEach(line => { if (line.trim()) dbg(line.trim()); });
 
-      // Detect backend. whisper.cpp prints lines like:
-      //   "whisper_backend_init_gpu: using CUDA backend"
-      //   "ggml_cuda_init: found 1 CUDA devices:"
-      //   "  Device 0: NVIDIA GeForce RTX 4070, compute capability 8.9"
-      if (/using CUDA backend|ggml_cuda_init|CUDA devices/i.test(text)) {
-        sawCuda = true;
-        diag.backend = 'CUDA';
+      // Detect Vulkan backend. whisper.cpp/ggml prints lines like:
+      //   "ggml_vulkan: Found 1 Vulkan devices:"
+      //   "ggml_vulkan: 0 = NVIDIA GeForce RTX 4070 (...) | ..."
+      //   "using Vulkan backend"
+      if (/ggml_vulkan|using Vulkan backend|Vulkan devices/i.test(text)) {
+        sawGpu = true;
+        diag.backend = 'Vulkan';
       }
-      const devMatch = text.match(/Device \d+:\s*(.+?)(?:,|$)/);
-      if (devMatch) diag.gpuDevice = devMatch[1].trim();
+      // Vulkan device line: "ggml_vulkan: 0 = NVIDIA GeForce RTX 4070 (NVIDIA) | ..."
+      const vkDev = text.match(/ggml_vulkan:\s*\d+\s*=\s*(.+?)\s*(?:\(|\|)/i);
+      if (vkDev) diag.gpuDevice = vkDev[1].trim();
       const backendMatch = text.match(/using (\w+) backend/i);
       if (backendMatch) diag.backendLine = backendMatch[0];
-      // whisper prints timing summary at the end:
-      //   "whisper_print_timings: encode time = ..."
       const encMatch = text.match(/encode time\s*=\s*([\d.]+)\s*ms/i);
       if (encMatch) diag.encodeMs = parseFloat(encMatch[1]);
     });
@@ -412,8 +412,8 @@ ipcMain.handle('transcribe', async (_e, videoPath, opts = {}) => {
     proc.on('close', (code) => {
       diag.elapsedMs = Date.now() - t0;
       if (!useGpu) diag.backend = 'CPU';
-      else if (!sawCuda && diag.backend !== 'CUDA') diag.backend = 'CPU';
-      if (code === 0) resolve({ stdout, stderr, sawCuda });
+      else if (!sawGpu && diag.backend !== 'Vulkan') diag.backend = 'CPU';
+      if (code === 0) resolve({ stdout, stderr, sawGpu });
       else reject(new Error(`whisper failed (exit ${code})\n${stderr.slice(-600)}`));
     });
     proc.on('error', (err) => reject(err));
@@ -426,9 +426,9 @@ ipcMain.handle('transcribe', async (_e, videoPath, opts = {}) => {
   } else {
     try {
       const r = await runWhisper(true);
-      gpuWorked = r.sawCuda;
-      if (!r.sawCuda && forceMode === 'auto') {
-        dbg('⚠️ GPU requested but no CUDA backend detected — whisper ran on CPU.');
+      gpuWorked = r.sawGpu;
+      if (!r.sawGpu && forceMode === 'auto') {
+        dbg('⚠️ GPU requested but no Vulkan backend detected — whisper ran on CPU.');
       }
     } catch (gpuErr) {
       dbg('✗ GPU run failed: ' + gpuErr.message);
@@ -507,7 +507,9 @@ function renderVideo({ videoPath, captions, shapes, style, videoSize, outPath, q
   filters.push(`subtitles='${escAss}'`);
 
   for (const s of shapes || []) {
-    const enable = `between(t,${s.start.toFixed(3)},${s.end.toFixed(3)})`;
+    const start = Number.isFinite(s.start) ? s.start : 0;
+    const end = Number.isFinite(s.end) ? s.end : start + 3;
+    const enable = `between(t,${start.toFixed(3)},${end.toFixed(3)})`;
     const color = hexToFfColor(s.color, s.opacity ?? 1);
     if (s.type === 'rect' || s.type === 'circle') {
       filters.push(
@@ -546,6 +548,8 @@ function renderVideo({ videoPath, captions, shapes, style, videoSize, outPath, q
     const args = [
       '-y', '-i', videoPath,
       '-vf', filterChain,
+      '-map', '0:v:0',        // first video stream
+      '-map', '0:a:0?',       // first audio stream IF it exists (the ? makes it optional)
       '-c:v', 'libx264', '-preset', preset, '-crf', crf,
       '-pix_fmt', 'yuv420p',
       '-c:a', 'aac', '-b:a', '256k',
@@ -724,19 +728,19 @@ function buildAss(captions, style, videoSize) {
     if (!cap.words || cap.words.length === 0) continue;
 
     const px = Math.round(cap.x ?? W / 2);
-    const py = Math.round(cap.y ?? H - 100);
+    const py = Math.round(cap.y ?? H / 2);
 
     for (let i = 0; i < cap.words.length; i++) {
       const w = cap.words[i];
 
       // Helper to render one word with the right styling
       const renderWord = (word, wIdx) => {
+        if (!word) return '';  // guard against stale line indices
         if (wIdx === i) {
           if (useBox) {
-            // Wrap active word in opaque box: switch BorderStyle to 3 via \bord + back color.
-            // ASS inline can't switch BorderStyle, so we emulate a box with a thick border
-            // in the box color behind the highlight-colored text.
-            return `{\\c${highlightColor}\\3c${boxColor}\\bord6\\shad0}${escAss(word.text)}{\\c${baseColor}\\3c${outline}\\bord3}`;
+            // Wrap active word in opaque box via a thick border in the box color,
+            // then restore the base color + the user's chosen outline width/color.
+            return `{\\c${highlightColor}\\3c${boxColor}\\bord6\\shad0}${escAss(word.text)}{\\c${baseColor}\\3c${outline}\\bord${outlineW}\\shad${shadowW}}`;
           }
           return `{\\c${highlightColor}}${escAss(word.text)}{\\c${baseColor}}`;
         }
@@ -771,10 +775,13 @@ function escAss(s) {
 }
 
 function assTime(seconds) {
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  const s = Math.floor(seconds % 60);
-  const cs = Math.floor((seconds * 100) % 100);
+  // Guard against NaN/undefined/negative to avoid corrupt "NaN:NaN" timestamps.
+  let t = Number(seconds);
+  if (!Number.isFinite(t) || t < 0) t = 0;
+  const h = Math.floor(t / 3600);
+  const m = Math.floor((t % 3600) / 60);
+  const s = Math.floor(t % 60);
+  const cs = Math.floor((t * 100) % 100);
   return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}.${String(cs).padStart(2, '0')}`;
 }
 
