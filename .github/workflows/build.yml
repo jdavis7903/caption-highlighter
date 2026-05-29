@@ -30,7 +30,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: bin
-          key: binaries-vulkan-v1-medium-en
+          key: binaries-vulkan-v1-large-v3-turbo
 
       - name: Install Vulkan SDK
         if: steps.cache-binaries.outputs.cache-hit != 'true'
@@ -65,9 +65,19 @@ jobs:
           # MSBuild parallelism is passed via -- /m rather than -j.
           cmake --build build --config Release -- /m
           Pop-Location
-          # Locate the CLI exe (named whisper-cli.exe in modern builds; main.exe older)
-          $exe = Get-ChildItem -Path whisper-src/build -Recurse -Include 'whisper-cli.exe','main.exe' -File | Select-Object -First 1
-          if (-not $exe) { throw "Build did not produce a whisper CLI executable" }
+          # whisper.cpp ships DEPRECATION STUBS: tiny exes that print a warning and exit 1.
+          # The stub and the real binary can share a name (whisper-cli.exe) in different
+          # subdirs, or the stub may be named whisper-cli.exe while the real one is
+          # whisper-whisper-cli.exe (double-prefix bug, issue #3023). The ONLY reliable
+          # discriminator is size: stubs are tiny (<200KB), the real CLI is several MB.
+          $allCli = Get-ChildItem -Path whisper-src/build -Recurse -File |
+                    Where-Object { $_.Name -in @('whisper-cli.exe','whisper-whisper-cli.exe','main.exe','whisper-main.exe') }
+          Write-Host "Candidate CLI binaries found:"
+          $allCli | Select-Object FullName, @{N='KB';E={[math]::Round($_.Length/1KB)}} | Format-Table -AutoSize
+          # Pick the largest one that exceeds the stub threshold.
+          $exe = $allCli | Where-Object { $_.Length -gt 200000 } | Sort-Object Length -Descending | Select-Object -First 1
+          if (-not $exe) { throw "Build did not produce a real whisper CLI executable (only stubs found)" }
+          Write-Host "Selected: $($exe.FullName) ($([math]::Round($exe.Length/1KB))KB)"
           # Copy exe (normalize name to whisper-cli.exe) + every produced DLL into bin/
           Copy-Item $exe.FullName -Destination 'bin/whisper-cli.exe' -Force
           Get-ChildItem -Path whisper-src/build -Recurse -Include '*.dll' -File | ForEach-Object {
@@ -77,14 +87,14 @@ jobs:
           Write-Host "whisper.cpp (Vulkan) built and installed:"
           Get-ChildItem bin | Select-Object Name, Length | Format-Table
 
-      - name: Download Whisper Medium English model
+      - name: Download Whisper large-v3-turbo model
         if: steps.cache-binaries.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $url = 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.en.bin'
-          $dest = 'bin/ggml-medium.en.bin'
-          Write-Host "Downloading Whisper Medium English model (~1.5GB)..."
+          $url = 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin'
+          $dest = 'bin/ggml-large-v3-turbo.bin'
+          Write-Host "Downloading Whisper large-v3-turbo model (~1.6GB)..."
           $maxAttempts = 3
           for ($i = 1; $i -le $maxAttempts; $i++) {
             try {
@@ -123,7 +133,7 @@ jobs:
       - name: Verify all binaries present
         shell: pwsh
         run: |
-          $required = @('whisper-cli.exe', 'ggml-medium.en.bin', 'ffmpeg.exe', 'ffprobe.exe')
+          $required = @('whisper-cli.exe', 'ggml-large-v3-turbo.bin', 'ffmpeg.exe', 'ffprobe.exe')
           foreach ($f in $required) {
             if (-not (Test-Path "bin/$f")) {
               Write-Error "MISSING: bin/$f"
@@ -135,6 +145,24 @@ jobs:
           $dlls = Get-ChildItem bin -Filter '*.dll'
           Write-Host "DLLs shipped in bin/:"
           $dlls | Select-Object Name | Format-Table
+          # SMOKE TEST: run whisper-cli -h and confirm it's the REAL binary, not a
+          # deprecation stub. The stub prints "is deprecated" and exits non-zero;
+          # the real binary prints usage text. Fail the build if we shipped a stub.
+          Push-Location bin
+          $out = & .\whisper-cli.exe -h 2>&1 | Out-String
+          $code = $LASTEXITCODE
+          Pop-Location
+          Write-Host "whisper-cli -h output (first 300 chars):"
+          Write-Host $out.Substring(0, [Math]::Min(300, $out.Length))
+          if ($out -match 'is deprecated') {
+            Write-Error "whisper-cli.exe is a DEPRECATION STUB, not the real binary. Build selected the wrong exe."
+            exit 1
+          }
+          if ($out -notmatch 'usage:|--threads|--model') {
+            Write-Error "whisper-cli.exe did not print expected usage text (exit $code). Possibly broken or missing DLLs."
+            exit 1
+          }
+          Write-Host "✓ whisper-cli.exe is the real binary and runs."
 
       - name: Install npm dependencies
         working-directory: app

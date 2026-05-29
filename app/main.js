@@ -13,7 +13,7 @@ const RESOURCES_DIR = isPackaged
 const BIN_DIR = path.join(RESOURCES_DIR, 'bin');
 
 const WHISPER_EXE = path.join(BIN_DIR, 'whisper-cli.exe');
-const WHISPER_MODEL = path.join(BIN_DIR, 'ggml-medium.en.bin');
+const WHISPER_MODEL = path.join(BIN_DIR, 'ggml-large-v3-turbo.bin');
 const FFMPEG = path.join(BIN_DIR, 'ffmpeg.exe');
 const FFPROBE = path.join(BIN_DIR, 'ffprobe.exe');
 

@@ -72,17 +72,27 @@
     background: #000;
     position: relative;
     min-height: 0;
+    min-width: 0;
     overflow: hidden;
+    padding: 8px;
   }
   .video-wrap {
     position: relative;
+    /* Shrink to the video's rendered size, but never exceed the area.
+       max-height works here because the flex item resolves against the
+       flex container's definite height (the grid row). */
     max-width: 100%;
     max-height: 100%;
+    display: inline-flex;
   }
   #videoEl {
     display: block;
     max-width: 100%;
     max-height: 100%;
+    width: auto;
+    height: auto;
+    /* The wrap shrinks to the video, so the element box == visible video,
+       which keeps the caption overlay (inset:0) perfectly aligned. */
   }
   /* Overlay for captions + shapes (positioned over video).
      The overlay itself NEVER captures clicks — only caption/shape children do.
