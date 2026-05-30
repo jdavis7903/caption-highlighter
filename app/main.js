@@ -295,6 +295,9 @@ function parseFrameRate(rate) {
 }
 
 ipcMain.handle('probe-video', async (_e, videoPath) => {
+  if (!videoPath || typeof videoPath !== 'string') {
+    return Promise.reject(new Error('No video path provided.'));
+  }
   return new Promise((resolve, reject) => {
     execFile(FFPROBE, [
       '-v', 'error',
@@ -306,12 +309,14 @@ ipcMain.handle('probe-video', async (_e, videoPath) => {
       if (err) return reject(err);
       try {
         const data = JSON.parse(stdout);
-        const v = data.streams.find(s => s.codec_type === 'video');
+        const streams = Array.isArray(data.streams) ? data.streams : [];
+        const v = streams.find(s => s.codec_type === 'video');
+        if (!v) return reject(new Error('No video stream found in this file.'));
         resolve({
-          width: v?.width || 1920,
-          height: v?.height || 1080,
-          duration: parseFloat(data.format.duration) || 0,
-          fps: parseFrameRate(v?.r_frame_rate),
+          width: v.width || 1920,
+          height: v.height || 1080,
+          duration: parseFloat(data.format?.duration) || 0,
+          fps: parseFrameRate(v.r_frame_rate),
         });
       } catch (e) {
         reject(e);
@@ -322,6 +327,12 @@ ipcMain.handle('probe-video', async (_e, videoPath) => {
 
 // ─── TRANSCRIBE ─────────────────────────────────────────────────────────
 ipcMain.handle('transcribe', async (_e, videoPath, opts = {}) => {
+  if (!videoPath || typeof videoPath !== 'string') {
+    throw new Error('No video path provided for transcription.');
+  }
+  if (!fs.existsSync(WHISPER_MODEL)) {
+    throw new Error('Whisper model not found. The installation may be incomplete — try reinstalling.');
+  }
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'caphi-'));
   const wavPath = path.join(tmpDir, 'audio.wav');
   const forceMode = opts.forceMode || 'auto'; // 'auto' | 'gpu' | 'cpu'
@@ -455,19 +466,40 @@ ipcMain.handle('transcribe', async (_e, videoPath, opts = {}) => {
     throw new Error('Failed to parse whisper output: ' + e.message);
   }
 
-  // Flatten into word list with timestamps
+  // Flatten into word list with timestamps.
+  // With -ml 1, whisper emits ONE token per segment. Its tokenizer prefixes a
+  // real word-start with a leading space (" Washington"); a sub-word continuation
+  // has NO leading space ("ton"). We use that to stitch fragments back into whole
+  // words — otherwise "Washington" can arrive as "Washing" + "ton" as two chunks.
   const words = [];
   for (const seg of raw.transcription || []) {
-    const text = (seg.text || '').trim();
-    if (!text) continue;
-    // offsets are in ms
+    const rawText = seg.text || '';
+    if (!rawText.trim()) continue;
     const startMs = seg.offsets?.from ?? 0;
     const endMs = seg.offsets?.to ?? startMs;
-    words.push({
-      text,
-      start: startMs / 1000,
-      end: endMs / 1000,
-    });
+    const start = startMs / 1000;
+    const end = endMs / 1000;
+
+    const hasLeadingSpace = /^\s/.test(rawText);
+    const piece = rawText.trim();
+    // A token is a CONTINUATION (merge into previous) when it has no leading space,
+    // begins with a letter/digit (not punctuation), and isn't the first word.
+    const isContinuation =
+      words.length > 0 &&
+      !hasLeadingSpace &&
+      /^[A-Za-z0-9'’]/.test(piece) &&
+      // don't merge if previous ended with sentence punctuation
+      !/[.!?]$/.test(words[words.length - 1].text);
+    // Standalone punctuation (",", ".", "?!") attaches to the previous word.
+    const isPunctuation = words.length > 0 && /^[.,!?;:’'")\]}…-]+$/.test(piece);
+
+    if (isContinuation || isPunctuation) {
+      const prev = words[words.length - 1];
+      prev.text += piece;       // glue fragment/punctuation on, no space
+      prev.end = end;           // extend timing to cover it
+    } else {
+      words.push({ text: piece, start, end });
+    }
   }
 
   return {
@@ -712,6 +744,33 @@ ipcMain.handle('find-media-encoder', () => {
 
 
 // ─── ASS BUILDER ────────────────────────────────────────────────────────
+
+// Rough per-character width estimate as a fraction of font size. Proportional
+// fonts vary, but this average is close enough to place a bouncing ball over
+// each word's horizontal center. Tuned for typical sans-serif caption fonts.
+function estimateTextWidth(text, fontSize) {
+  let units = 0;
+  for (const ch of String(text)) {
+    if (/[iIl.,'!|:;]/.test(ch)) units += 0.28;
+    else if (/[mwMW]/.test(ch)) units += 0.92;
+    else if (/[A-Z]/.test(ch)) units += 0.66;
+    else if (/[0-9]/.test(ch)) units += 0.55;
+    else if (ch === ' ') units += 0.30;
+    else units += 0.52;
+  }
+  return units * fontSize;
+}
+
+// An ASS vector path (\p1 drawing) for a filled circle of radius r centered at
+// the drawing origin. Uses 4 cubic Béziers (the standard 0.5523 kappa circle).
+function assCircle(r) {
+  const k = (r * 0.5523).toFixed(1);
+  const rr = r.toFixed(1);
+  // Start at top, go clockwise with 4 bezier arcs. Coordinates are relative to
+  // the \pos origin used on the drawing's Dialogue line.
+  return `m 0 ${-rr} b ${k} ${-rr} ${rr} ${-k} ${rr} 0 b ${rr} ${k} ${k} ${rr} 0 ${rr} b ${-k} ${rr} ${-rr} ${k} ${-rr} 0 b ${-rr} ${-k} ${-k} ${-rr} 0 ${-rr}`;
+}
+
 function buildAss(captions, style, videoSize) {
   const { width: W, height: H } = videoSize;
   const font = style.font || 'Arial';
@@ -725,6 +784,24 @@ function buildAss(captions, style, videoSize) {
   const italic = style.italic ? -1 : 0;
   const outlineW = style.noOutline ? 0 : 3;   // Outline thickness (0 = none)
   const shadowW = style.noOutline ? 0 : 1;    // Shadow off when no outline
+  const effect = style.effect || 'none';
+
+  // Drop shadow → ASS inline overrides. ASS supports independent X/Y shadow
+  // offsets (\xshad, \yshad), shadow colour (\4c) and shadow alpha (\4a), which
+  // lets us honor the angle/distance the user picked. Blur via \blur.
+  let shadowTag = '';
+  if (style.shadow) {
+    const ang = (style.shadowAngle || 0) * Math.PI / 180;
+    const dist = style.shadowDistance || 0;
+    const xs = (Math.cos(ang) * dist).toFixed(1);
+    const ys = (Math.sin(ang) * dist).toFixed(1);
+    const blur = Math.max(0, style.shadowBlur || 0);
+    const shadowColor = hexToAssColor(style.shadowColor || '#000000');
+    // ASS alpha: 00 = opaque, FF = transparent. opacity 0-100 → alpha hex.
+    const opacity = Math.min(100, Math.max(0, style.shadowOpacity ?? 80));
+    const alphaHex = Math.round((1 - opacity / 100) * 255).toString(16).padStart(2, '0').toUpperCase();
+    shadowTag = `\\xshad${xs}\\yshad${ys}\\blur${blur}\\4c${shadowColor}\\4a&H${alphaHex}&`;
+  }
 
   const header = [
     '[Script Info]',
@@ -751,38 +828,186 @@ function buildAss(captions, style, videoSize) {
 
     const px = Math.round(cap.x ?? W / 2);
     const py = Math.round(cap.y ?? H / 2);
+    const capStart = cap.words[0].start;
+    const capEnd = cap.words[cap.words.length - 1].end;
+    const lines = (cap.lines && cap.lines.length)
+      ? cap.lines
+      : [cap.words.map((_, idx) => idx)];
 
-    for (let i = 0; i < cap.words.length; i++) {
-      const w = cap.words[i];
-
-      // Helper to render one word with the right styling
-      const renderWord = (word, wIdx) => {
-        if (!word) return '';  // guard against stale line indices
-        if (wIdx === i) {
-          if (useBox) {
-            // Wrap active word in opaque box via a thick border in the box color,
-            // then restore the base color + the user's chosen outline width/color.
-            return `{\\c${highlightColor}\\3c${boxColor}\\bord6\\shad0}${escAss(word.text)}{\\c${baseColor}\\3c${outline}\\bord${outlineW}\\shad${shadowW}}`;
-          }
-          return `{\\c${highlightColor}}${escAss(word.text)}{\\c${baseColor}}`;
+    // Highlight rendering for one word within a full-caption re-render
+    const renderWord = (word, wIdx, activeIdx) => {
+      if (!word) return '';
+      if (wIdx === activeIdx) {
+        let scaleIn = '', scaleOut = '';
+        if (effect === 'scalepop') {
+          // Active word pops to 118% then eases back over the word's duration.
+          const dur = Math.max(60, Math.round((word.end - word.start) * 1000));
+          const half = Math.round(dur / 2);
+          scaleIn = `\\t(0,${half},\\fscx118\\fscy118)\\t(${half},${dur},\\fscx100\\fscy100)`;
+          scaleOut = '';
         }
-        return escAss(word.text);
-      };
+        if (useBox) {
+          return `{\\c${highlightColor}\\3c${boxColor}\\bord6\\shad0${scaleIn}}${escAss(word.text)}{\\c${baseColor}\\3c${outline}\\bord${outlineW}\\shad${shadowW}\\fscx100\\fscy100}`;
+        }
+        return `{\\c${highlightColor}${scaleIn}}${escAss(word.text)}{\\c${baseColor}\\fscx100\\fscy100}`;
+      }
+      return escAss(word.text);
+    };
 
+    const buildBody = (activeIdx) => {
       const parts = [];
-      const lines = (cap.lines && cap.lines.length)
-        ? cap.lines
-        : [cap.words.map((_, idx) => idx)];
-
       lines.forEach((lineIndices, lineIdx) => {
         if (lineIdx > 0) parts.push('\\N');
         lineIndices.forEach((wIdx, j) => {
           if (j > 0) parts.push(' ');
-          parts.push(renderWord(cap.words[wIdx], wIdx));
+          parts.push(renderWord(cap.words[wIdx], wIdx, activeIdx));
         });
       });
+      return parts.join('');
+    };
 
-      const text = `{\\pos(${px},${py})\\an5}` + parts.join('');
+    if (effect === 'slidefade') {
+      // ── Entrance + per-word highlight as TWO layers ──
+      // Layer 0: the whole caption rises from below with a fade, shown for its
+      // full duration (no per-word highlight changes — keeps the move smooth).
+      const riseY = py + Math.round(H * 0.06);
+      const moveDur = 300;
+      const introEnd = capStart + moveDur / 1000;
+      events.push(
+        `Dialogue: 0,${assTime(capStart)},${assTime(capEnd)},Default,,0,0,0,,` +
+        `{\\an5${shadowTag}\\move(${px},${riseY},${px},${py},0,${moveDur})\\fad(${moveDur},0)}` + buildBody(-1)
+      );
+      // Layer 1: per-word highlight overlaid on top, starting after the intro.
+      for (let i = 0; i < cap.words.length; i++) {
+        const w = cap.words[i];
+        const s = Math.max(w.start, introEnd);
+        if (s >= w.end) continue;
+        events.push(
+          `Dialogue: 1,${assTime(s)},${assTime(w.end)},Default,,0,0,0,,` +
+          `{\\pos(${px},${py})\\an5${shadowTag}}` + buildBody(i)
+        );
+      }
+      continue;
+    }
+
+    if (effect === 'bounceball') {
+      // ── Bouncing ball that lands ON each word as it's spoken ──
+      // 1) Render the caption text (per-word highlight) underneath, like default.
+      // 2) Overlay a ball that arcs down to the top of each word, synced to timing.
+      //
+      // We only support a single visual line for the ball path (the most common
+      // case). For multi-line captions the ball tracks the flattened word order.
+      const flat = lines.flat().map(idx => cap.words[idx]).filter(Boolean);
+      if (flat.length === 0) { continue; }
+
+      // Compute each word's horizontal center relative to the caption center.
+      // The full line width is the sum of word widths + single-space gaps.
+      const spaceW = estimateTextWidth(' ', size);
+      const wordW = flat.map(w => estimateTextWidth(w.text, size));
+      const totalW = wordW.reduce((a, b) => a + b, 0) + spaceW * (flat.length - 1);
+      let cursor = -totalW / 2;            // left edge relative to center (\an5)
+      const centers = [];
+      for (let k = 0; k < flat.length; k++) {
+        centers.push(px + cursor + wordW[k] / 2);
+        cursor += wordW[k] + spaceW;
+      }
+      const topOfText = py - size * 0.6;   // a bit above text baseline center
+      const ballR = Math.max(4, Math.round(size * 0.16));
+      const restY = topOfText - ballR - 4; // ball sits just above the word top
+      const arcH = Math.round(size * 0.9); // how high it rises between words
+      const ballColor = highlightColor;
+
+      // Text layer (per word highlight), same as default path.
+      for (let i = 0; i < cap.words.length; i++) {
+        const w = cap.words[i];
+        events.push(
+          `Dialogue: 0,${assTime(w.start)},${assTime(w.end)},Default,,0,0,0,,` +
+          `{\\pos(${px},${py})\\an5${shadowTag}}` + buildBody(i)
+        );
+      }
+
+      // Ball layer: for each word, approximate the arc into that word with a few
+      // short linear \move hops (ASS \move is linear, so we chain segments).
+      const drawing = assCircle(ballR);
+      const segPerWord = 6;
+      for (let k = 0; k < flat.length; k++) {
+        const w = flat[k];
+        const fromX = (k === 0) ? centers[0] : centers[k - 1];
+        const toX = centers[k];
+        const startMs = Math.round(w.start * 1000);
+        const endMs = Math.round(w.end * 1000);
+        const dur = Math.max(1, endMs - startMs);
+        // Parabola: y dips to restY at the word, peaks arcH above between words.
+        for (let s = 0; s < segPerWord; s++) {
+          const t0 = s / segPerWord, t1 = (s + 1) / segPerWord;
+          const x0 = fromX + (toX - fromX) * t0;
+          const x1 = fromX + (toX - fromX) * t1;
+          // height profile: starts high (arc), lands (0) at end of the word
+          const h0 = arcH * Math.sin(Math.PI * (1 - t0) / 2) * (k === 0 ? 1 : 1);
+          const h1 = arcH * Math.sin(Math.PI * (1 - t1) / 2);
+          const y0 = restY - h0;
+          const y1 = restY - h1;
+          const segStart = startMs + Math.round(dur * t0);
+          const segEnd = startMs + Math.round(dur * t1);
+          events.push(
+            `Dialogue: 2,${assTime(segStart / 1000)},${assTime(segEnd / 1000)},Default,,0,0,0,,` +
+            `{\\an7\\move(${x0.toFixed(0)},${y0.toFixed(0)},${x1.toFixed(0)},${y1.toFixed(0)})` +
+            `\\p1\\bord0\\shad0\\1c${ballColor}}${drawing}{\\p0}`
+          );
+        }
+      }
+      continue;
+    }
+
+    if (effect === 'wordpaint') {
+      // ── Karaoke fill sweep: one Dialogue for the whole caption using \kf,
+      // where each word's \kf duration = its spoken length in centiseconds. ──
+      const parts = [];
+      lines.forEach((lineIndices, lineIdx) => {
+        if (lineIdx > 0) parts.push('\\N');
+        lineIndices.forEach((wIdx, j) => {
+          if (j > 0) parts.push(' ');
+          const word = cap.words[wIdx];
+          if (!word) return;
+          const cs = Math.max(1, Math.round((word.end - word.start) * 100));
+          parts.push(`{\\kf${cs}}${escAss(word.text)}`);
+        });
+      });
+      // SecondaryColour = base, PrimaryColour fill = highlight. We set both inline:
+      // pre-fill is secondary (base), swept fill is primary (highlight).
+      events.push(
+        `Dialogue: 0,${assTime(capStart)},${assTime(capEnd)},Default,,0,0,0,,` +
+        `{\\an5${shadowTag}\\pos(${px},${py})\\1c${highlightColor}\\2c${baseColor}}` + parts.join('')
+      );
+      continue;
+    }
+
+    if (effect === 'cascade') {
+      // ── Staircase: each word on its own line, indented progressively right.
+      // Rendered as a per-word karaoke highlight but with a custom stacked layout.
+      const lineHeight = Math.round(size * 1.1);
+      const indent = Math.round(size * 0.6);
+      const flatWords = cap.words;
+      for (let i = 0; i < flatWords.length; i++) {
+        const w = flatWords[i];
+        // Build the stacked block with word i highlighted
+        const stacked = flatWords.map((ww, k) => {
+          const pad = ' '.repeat(0); // horizontal offset done via \pos per line instead
+          const col = (k === i) ? highlightColor : baseColor;
+          return `{\\pos(${px + k * indent},${py + k * lineHeight - (flatWords.length - 1) * lineHeight / 2})\\an4\\c${col}${shadowTag}}${escAss(ww.text)}`;
+        });
+        // Each stacked word is its own positioned event for this time slice
+        stacked.forEach(s => {
+          events.push(`Dialogue: 0,${assTime(w.start)},${assTime(w.end)},Default,,0,0,0,,${s}`);
+        });
+      }
+      continue;
+    }
+
+    // ── Default + scalepop: per-word highlight re-render ──
+    for (let i = 0; i < cap.words.length; i++) {
+      const w = cap.words[i];
+      const text = `{\\pos(${px},${py})\\an5${shadowTag}}` + buildBody(i);
       events.push(
         `Dialogue: 0,${assTime(w.start)},${assTime(w.end)},Default,,0,0,0,,${text}`
       );
