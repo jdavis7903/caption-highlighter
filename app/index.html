@@ -5,26 +5,106 @@
 <title>Caption Highlighter</title>
 <style>
   :root {
-    --bg: #1a1a1a;
-    --panel: #242424;
-    --panel-2: #2d2d2d;
-    --border: #3a3a3a;
-    --text: #e8e8e8;
-    --text-dim: #888;
+    /* ── Surfaces (layered dark theme — deep, calm, content-first per HIG deference) ── */
+    --bg: #0e0e10;
+    --bg-elev: #151517;
+    --panel: #1a1a1e;
+    --panel-2: #222227;
+    --panel-3: #2b2b31;
+    --border: #2a2a30;
+    --border-strong: #38383f;
+
+    /* ── Liquid Glass materials (translucent, backdrop-blurred — used sparingly
+       on chrome only, never over video or behind caption text, per Apple's
+       "highlight key elements, not everywhere" guidance) ── */
+    --glass-thin: rgba(30, 30, 36, 0.55);
+    --glass: rgba(26, 26, 32, 0.68);
+    --glass-thick: rgba(22, 22, 28, 0.82);
+    --glass-border: rgba(255, 255, 255, 0.08);
+    --glass-highlight: rgba(255, 255, 255, 0.06);
+    --blur-sm: 12px;
+    --blur-md: 22px;
+    --blur-lg: 40px;
+
+    /* ── Text ── */
+    --text: #f4f4f6;
+    --text-soft: #b4b4be;
+    --text-dim: #76767f;
+
+    /* ── Brand / semantic ── */
     --accent: #4a9eff;
     --accent-hover: #6bb1ff;
-    --danger: #ff4a4a;
-    --success: #4aff7a;
+    --accent-soft: rgba(74, 158, 255, 0.14);
+    --accent-glow: rgba(74, 158, 255, 0.30);
+    --danger: #ff5a5a;
+    --danger-soft: rgba(255, 90, 90, 0.14);
+    --success: #3ddc84;
+    --success-soft: rgba(61, 220, 132, 0.14);
+    --warn: #ffb84a;
+
+    /* ── Radius (Apple "soft precision" — generous, consistent rounding) ── */
+    --r-sm: 8px;
+    --r-md: 12px;
+    --r-lg: 18px;
+    --r-pill: 999px;
+
+    /* ── Elevation (Apple uses paired ambient + key-light shadows for real depth) ── */
+    --shadow-sm: 0 1px 2px rgba(0,0,0,0.25), 0 1px 1px rgba(0,0,0,0.2);
+    --shadow-md: 0 2px 8px rgba(0,0,0,0.28), 0 8px 24px rgba(0,0,0,0.32);
+    --shadow-lg: 0 8px 24px rgba(0,0,0,0.35), 0 24px 60px rgba(0,0,0,0.5);
+    --shadow-glass: 0 8px 32px rgba(0,0,0,0.4), inset 0 1px 0 var(--glass-highlight);
+
+    /* ── Motion ── */
+    --ease-standard: cubic-bezier(0.4, 0.0, 0.2, 1);
+    --ease-decel: cubic-bezier(0.0, 0.0, 0.2, 1);
+    --ease-accel: cubic-bezier(0.4, 0.0, 1, 1);
+    --ease-emphasized: cubic-bezier(0.2, 0.0, 0, 1);
+    --ease-spring: cubic-bezier(0.34, 1.4, 0.64, 1);
+    --t-instant: 80ms;
+    --t-fast: 150ms;
+    --t-normal: 240ms;
+    --t-slow: 360ms;
+  }
+  /* Accessibility: honor Reduce Transparency — swap glass for solid surfaces
+     so contrast never drops below readable (Apple's explicit glass guidance). */
+  @media (prefers-reduced-transparency: reduce) {
+    :root {
+      --glass-thin: var(--panel);
+      --glass: var(--panel);
+      --glass-thick: var(--bg-elev);
+    }
   }
   * { box-sizing: border-box; }
   html, body { margin: 0; padding: 0; height: 100%; }
   body {
     background: var(--bg);
     color: var(--text);
-    font-family: 'Segoe UI', system-ui, sans-serif;
+    font-family: -apple-system, 'SF Pro Display', 'SF Pro Text', 'Segoe UI', system-ui, sans-serif;
     font-size: 13px;
+    letter-spacing: -0.01em;
     overflow: hidden;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
   }
+  /* Respect users who prefer less motion — disable all non-essential animation. */
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.001ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.001ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+  /* Custom scrollbars — subtle, Spotify-like */
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb {
+    background: var(--border-strong);
+    border-radius: var(--r-pill);
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+  ::-webkit-scrollbar-thumb:hover { background: #4a4a54; background-clip: content-box; }
   .app {
     display: grid;
     grid-template-columns: 380px 1fr;
@@ -33,27 +113,59 @@
   }
   .header {
     grid-column: 1 / -1;
-    background: var(--panel);
-    border-bottom: 1px solid var(--border);
-    padding: 8px 16px;
+    background: var(--glass);
+    backdrop-filter: blur(var(--blur-md)) saturate(1.4);
+    -webkit-backdrop-filter: blur(var(--blur-md)) saturate(1.4);
+    border-bottom: 1px solid var(--glass-border);
+    box-shadow: inset 0 1px 0 var(--glass-highlight);
+    padding: 0 18px;
+    height: 50px;
     display: flex;
     align-items: center;
-    gap: 12px;
+    gap: 10px;
+    -webkit-app-region: drag;
+    position: relative;
+    z-index: 10;
   }
-  .header h1 { margin: 0; font-size: 15px; font-weight: 500; }
-  .version { font-size: 11px; color: var(--text-dim); }
+  .header button, .header .update-pill { -webkit-app-region: no-drag; }
+  .header h1 {
+    margin: 0;
+    font-size: 14px;
+    font-weight: 600;
+    letter-spacing: 0.2px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .brand-dot {
+    width: 9px; height: 9px;
+    border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 10px var(--accent-glow);
+  }
+  .version { font-size: 11px; color: var(--text-dim); font-variant-numeric: tabular-nums; }
   .header-right { margin-left: auto; display: flex; gap: 8px; align-items: center; }
   .update-pill {
     background: var(--accent);
-    color: white;
-    padding: 4px 10px;
-    border-radius: 12px;
+    color: #fff;
+    padding: 5px 12px;
+    border-radius: var(--r-pill);
     font-size: 11px;
+    font-weight: 500;
     cursor: pointer;
     display: none;
+    border: none;
+    transition: background var(--t-fast) var(--ease-standard), transform var(--t-fast) var(--ease-spring);
+    box-shadow: 0 0 0 0 var(--accent-glow);
+    animation: pillGlow 2.4s ease-in-out infinite;
+  }
+  @keyframes pillGlow {
+    0%, 100% { box-shadow: 0 0 0 0 var(--accent-glow); }
+    50% { box-shadow: 0 0 0 5px transparent; }
   }
   .update-pill.visible { display: inline-block; }
-  .update-pill:hover { background: var(--accent-hover); }
+  .update-pill:hover { background: var(--accent-hover); transform: translateY(-1px); }
+  .update-pill:active { transform: translateY(0) scale(0.97); }
 
   /* MAIN AREA (right column) */
   .main {
@@ -77,22 +189,18 @@
     padding: 8px;
   }
   .video-wrap {
-    position: relative;
-    /* Shrink to the video's rendered size, but never exceed the area.
-       max-height works here because the flex item resolves against the
-       flex container's definite height (the grid row). */
-    max-width: 100%;
-    max-height: 100%;
-    display: inline-flex;
+    position: absolute;
+    inset: 8px;
+    display: block;
   }
   #videoEl {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
     display: block;
-    max-width: 100%;
-    max-height: 100%;
-    width: auto;
-    height: auto;
-    /* The wrap shrinks to the video, so the element box == visible video,
-       which keeps the caption overlay (inset:0) perfectly aligned. */
+    background: #000;
   }
   /* Overlay for captions + shapes (positioned over video).
      The overlay itself NEVER captures clicks — only caption/shape children do.
@@ -143,19 +251,29 @@
     width: 80%;
     max-width: 600px;
     padding: 60px;
-    border: 2px dashed var(--border);
-    border-radius: 8px;
+    border: 2px dashed var(--border-strong);
+    border-radius: var(--r-lg);
     text-align: center;
     color: var(--text-dim);
     cursor: pointer;
-    transition: all 0.15s;
+    background: var(--bg-elev);
+    transition: border-color var(--t-normal) var(--ease-standard),
+                background var(--t-normal) var(--ease-standard),
+                transform var(--t-normal) var(--ease-spring);
   }
-  .drop-zone.drag-over { border-color: var(--accent); background: rgba(74, 158, 255, 0.05); }
+  .drop-zone:hover { border-color: var(--accent); color: var(--text-soft); transform: translateY(-2px); }
+  .drop-zone.drag-over {
+    border-color: var(--accent);
+    background: var(--accent-soft);
+    transform: scale(1.02);
+    box-shadow: 0 0 40px var(--accent-glow);
+  }
 
   .controls-bar {
-    background: var(--panel);
+    background: linear-gradient(180deg, var(--panel-2), var(--panel));
     border-bottom: 1px solid var(--border);
-    padding: 12px;
+    box-shadow: inset 0 1px 0 var(--glass-highlight);
+    padding: 16px;
     display: flex;
     flex-direction: column;
     gap: 8px;
@@ -163,47 +281,91 @@
   }
   .ctl-row { display: flex; gap: 8px; }
   .ctl-row button { flex: 1; }
-  .controls-bar > button {
-    width: 100%;
-  }
-  .controls-bar button {
+  .controls-bar > button { width: 100%; }
+
+  /* ── Unified button system ── */
+  .controls-bar button, .ghost-btn, .btn-group button, .field-btn {
     background: var(--panel-2);
-    color: var(--text);
+    color: var(--text-soft);
     border: 1px solid var(--border);
-    padding: 8px 14px;
-    border-radius: 4px;
+    padding: 9px 14px;
+    border-radius: var(--r-sm);
     cursor: pointer;
     font-size: 12px;
-    transition: background 0.12s, border-color 0.12s;
-  }
-  .controls-bar button:hover:not(:disabled) { background: #3a3a3a; border-color: #4a4a4a; }
-  .controls-bar button:active:not(:disabled) { transform: translateY(1px); }
-  .controls-bar button:disabled { opacity: 0.35; cursor: not-allowed; }
-  .controls-bar button.primary {
-    background: var(--accent);
-    border-color: var(--accent);
-    color: white;
     font-weight: 500;
+    font-family: inherit;
+    position: relative;
+    overflow: hidden;
+    transition: background var(--t-fast) var(--ease-standard),
+                border-color var(--t-fast) var(--ease-standard),
+                color var(--t-fast) var(--ease-standard),
+                transform var(--t-instant) var(--ease-standard),
+                box-shadow var(--t-fast) var(--ease-standard);
   }
-  .controls-bar button.primary:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
+  .controls-bar button:hover:not(:disabled),
+  .ghost-btn:hover:not(:disabled),
+  .btn-group button:hover:not(:disabled),
+  .field-btn:hover:not(:disabled) {
+    background: var(--panel-3);
+    border-color: var(--border-strong);
+    color: var(--text);
+  }
+  .controls-bar button:active:not(:disabled),
+  .ghost-btn:active:not(:disabled),
+  .btn-group button:active:not(:disabled) { transform: scale(0.975); }
+  .controls-bar button:disabled { opacity: 0.32; cursor: not-allowed; }
+
+  /* Ripple feedback on click (subtle, fast) */
+  .controls-bar button::after, .btn-group button::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: radial-gradient(circle at center, rgba(255,255,255,0.18) 0%, transparent 60%);
+    opacity: 0;
+    transform: scale(0.5);
+    pointer-events: none;
+    transition: opacity var(--t-slow) var(--ease-decel), transform var(--t-slow) var(--ease-decel);
+  }
+  .controls-bar button:active:not(:disabled)::after,
+  .btn-group button:active:not(:disabled)::after {
+    opacity: 1; transform: scale(1);
+    transition: none;
+  }
+
+  /* Primary action — Apple-style: subtle vertical gradient, luminous top edge */
+  .controls-bar button.primary {
+    background: linear-gradient(180deg, var(--accent-hover), var(--accent));
+    border: 1px solid rgba(255,255,255,0.12);
+    color: #fff;
+    font-weight: 600;
+    padding: 11px 14px;
+    box-shadow: var(--shadow-sm), inset 0 1px 0 rgba(255,255,255,0.25);
+  }
+  .controls-bar button.primary:hover:not(:disabled) {
+    filter: brightness(1.08);
+    transform: translateY(-1px);
+    box-shadow: 0 6px 20px var(--accent-glow), inset 0 1px 0 rgba(255,255,255,0.3);
+  }
+  .controls-bar button.primary:active:not(:disabled) { transform: translateY(0) scale(0.98); filter: brightness(0.96); }
   .controls-bar button.primary:disabled { opacity: 0.4; }
-  /* Gentle pulse to draw the eye to Transcribe once a video is loaded */
+
+  .ghost-btn { padding: 6px 12px; font-size: 11px; }
+
+  /* Ready-hint: gentle breathing glow drawing the eye to Transcribe */
   @keyframes readyPulse {
-    0%, 100% { box-shadow: 0 0 0 0 rgba(74,158,255,0.0); }
-    50% { box-shadow: 0 0 0 4px rgba(74,158,255,0.25); }
+    0%, 100% { box-shadow: 0 0 0 0 var(--accent-glow); }
+    50% { box-shadow: 0 0 0 6px transparent; }
   }
-  .controls-bar button.ready-hint:not(:disabled) { animation: readyPulse 1.8s ease-in-out 2; }
-  .ctl-sep {
-    width: 1px;
-    align-self: stretch;
-    background: var(--border);
-    margin: 2px 2px;
+  .controls-bar button.ready-hint:not(:disabled) {
+    animation: readyPulse 2s var(--ease-standard) infinite;
   }
+
   .progress-wrap {
     display: none;
     align-items: center;
-    gap: 8px;
+    gap: 10px;
     width: 100%;
+    animation: fadeInUp var(--t-normal) var(--ease-decel);
   }
   .progress-wrap.visible { display: flex; }
   .status-label {
@@ -213,24 +375,41 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    transition: color var(--t-normal) var(--ease-standard);
   }
-  .controls-bar button.primary:hover:not(:disabled) { background: var(--accent-hover); }
-
   .progress-bar {
     flex: 1;
-    height: 8px;
-    background: var(--panel-2);
-    border-radius: 4px;
+    height: 6px;
+    background: var(--panel-3);
+    border-radius: var(--r-pill);
     overflow: hidden;
     min-width: 100px;
+    position: relative;
   }
   .progress-fill {
     height: 100%;
-    background: var(--accent);
+    background: linear-gradient(90deg, var(--accent), var(--accent-hover));
     width: 0%;
-    transition: width 0.2s;
+    border-radius: var(--r-pill);
+    transition: width var(--t-slow) var(--ease-decel);
+    position: relative;
   }
-  .progress-label { font-size: 11px; color: var(--text-dim); white-space: nowrap; }
+  /* Spotify-style shimmer traveling across the active progress fill */
+  .progress-fill::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.35), transparent);
+    transform: translateX(-100%);
+    animation: shimmer 1.6s var(--ease-standard) infinite;
+  }
+  @keyframes shimmer { to { transform: translateX(100%); } }
+  .progress-label { font-size: 11px; color: var(--text-soft); white-space: nowrap; font-variant-numeric: tabular-nums; }
+
+  @keyframes fadeInUp {
+    from { opacity: 0; transform: translateY(6px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
 
   /* TRANSCRIPT */
   .transcript-area {
@@ -246,22 +425,45 @@
     margin: 0 0 8px 0;
     font-size: 12px;
     color: var(--text-dim);
-    font-weight: normal;
+    font-weight: 600;
+    letter-spacing: 0.3px;
   }
   .transcript-word {
     display: inline-block;
-    padding: 1px 3px;
+    padding: 1px 4px;
     margin: 1px;
     cursor: pointer;
-    border-radius: 2px;
+    border-radius: var(--r-sm);
+    transition: background var(--t-fast) var(--ease-standard), color var(--t-fast) var(--ease-standard);
   }
-  .transcript-word:hover { background: var(--panel-2); }
+  .transcript-word:hover { background: var(--accent-soft); color: var(--accent-hover); }
   .transcript-word.active { background: var(--accent); color: white; }
   .transcript-word.editing {
     background: var(--panel-2);
     outline: 1px solid var(--accent);
     cursor: text;
   }
+  /* Caption grouping in the transcript */
+  .caption-block {
+    display: inline-block;
+    vertical-align: top;
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    padding: 6px 9px 7px;
+    margin: 0 7px 7px 0;
+    background: var(--bg-elev);
+    transition: border-color var(--t-fast) var(--ease-standard), transform var(--t-fast) var(--ease-standard);
+  }
+  .caption-block:hover { border-color: var(--border-strong); transform: translateY(-1px); }
+  .caption-block-time {
+    font-size: 9px;
+    color: var(--text-dim);
+    margin-bottom: 3px;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.3px;
+  }
+  .caption-block-body { line-height: 1.5; }
+  .caption-line { white-space: nowrap; }
 
   /* SIDEBAR (left column) */
   .sidebar {
@@ -277,7 +479,9 @@
   .tab-bar {
     display: flex;
     border-bottom: 1px solid var(--border);
-    background: var(--bg);
+    background: var(--glass-thin);
+    backdrop-filter: blur(var(--blur-sm)) saturate(1.3);
+    -webkit-backdrop-filter: blur(var(--blur-sm)) saturate(1.3);
     position: sticky;
     top: 0;
     z-index: 5;
@@ -285,41 +489,52 @@
   }
   .tab {
     flex: 1;
-    padding: 10px 4px;
+    padding: 11px 4px;
     text-align: center;
     cursor: pointer;
     font-size: 11px;
+    font-weight: 500;
     color: var(--text-dim);
     border-bottom: 2px solid transparent;
-    transition: color 0.12s, background 0.12s;
+    transition: color var(--t-fast) var(--ease-standard), background var(--t-fast) var(--ease-standard);
     white-space: nowrap;
+    position: relative;
   }
   .tab:hover { color: var(--text); background: var(--panel-2); }
   .tab.active {
-    color: var(--text);
+    color: var(--accent);
     border-bottom-color: var(--accent);
     background: var(--panel);
   }
-  .tab-panel { display: none; padding: 12px; }
-  .tab-panel.active { display: block; }
+  .tab-panel { display: none; padding: 14px; }
+  .tab-panel.active { display: block; animation: tabIn var(--t-normal) var(--ease-decel); }
+  @keyframes tabIn {
+    from { opacity: 0; transform: translateY(4px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
   .tab-badge {
     display: none;
     margin-left: 5px;
     background: var(--accent);
     color: white;
     font-size: 10px;
-    border-radius: 8px;
+    border-radius: var(--r-pill);
     padding: 1px 6px;
     vertical-align: middle;
+    font-variant-numeric: tabular-nums;
+    animation: badgePop var(--t-normal) var(--ease-spring);
   }
+  @keyframes badgePop { from { transform: scale(0); } to { transform: scale(1); } }
   .tab-badge.visible { display: inline-block; }
 
-  .field { margin-bottom: 12px; }
+  .field { margin-bottom: 13px; }
   .field label {
     display: block;
     font-size: 11px;
     color: var(--text-dim);
-    margin-bottom: 4px;
+    margin-bottom: 5px;
+    font-weight: 500;
+    letter-spacing: 0.2px;
   }
   .field input[type="text"],
   .field input[type="number"],
@@ -329,134 +544,192 @@
     background: var(--bg);
     color: var(--text);
     border: 1px solid var(--border);
-    border-radius: 4px;
-    padding: 6px 8px;
+    border-radius: var(--r-sm);
+    padding: 8px 10px;
     font-size: 12px;
-    transition: border-color 0.12s;
+    font-family: inherit;
+    transition: border-color var(--t-fast) var(--ease-standard), box-shadow var(--t-fast) var(--ease-standard), background var(--t-fast) var(--ease-standard);
   }
+  .field input[type="text"]:hover,
+  .field input[type="number"]:hover,
+  .field input[type="password"]:hover,
+  .field select:hover { border-color: var(--border-strong); }
   .field input[type="text"]:focus,
   .field input[type="number"]:focus,
   .field input[type="password"]:focus,
   .field select:focus {
     outline: none;
     border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-soft);
+    background: var(--bg-elev);
   }
   .field input[type="color"] {
     width: 40px;
-    height: 28px;
+    height: 30px;
     border: 1px solid var(--border);
     background: var(--bg);
-    border-radius: 4px;
+    border-radius: var(--r-sm);
     cursor: pointer;
     vertical-align: middle;
+    transition: border-color var(--t-fast) var(--ease-standard), transform var(--t-fast) var(--ease-spring);
   }
+  .field input[type="color"]:hover { border-color: var(--accent); transform: scale(1.05); }
   .row { display: flex; gap: 8px; align-items: center; }
   .row > .field { flex: 1; }
-  .checkbox-row { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
-  .checkbox-row input { margin: 0; }
-  .checkbox-row label { margin: 0; color: var(--text); font-size: 12px; }
+  .checkbox-row { display: flex; align-items: center; gap: 7px; margin-bottom: 9px; }
+  .checkbox-row input { margin: 0; cursor: pointer; accent-color: var(--accent); width: 15px; height: 15px; }
+  .checkbox-row label { margin: 0; color: var(--text-soft); font-size: 12px; cursor: pointer; }
+  .field-btn { padding: 7px 11px; font-size: 11px; white-space: nowrap; }
 
   /* Shape list */
   .shape-list {
     border: 1px solid var(--border);
-    border-radius: 4px;
+    border-radius: var(--r-md);
     max-height: 200px;
     overflow-y: auto;
     margin-bottom: 8px;
   }
   .shape-row {
-    padding: 6px 8px;
+    padding: 8px 10px;
     border-bottom: 1px solid var(--border);
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     cursor: pointer;
     font-size: 11px;
+    transition: background var(--t-fast) var(--ease-standard);
   }
+  .shape-row:last-child { border-bottom: none; }
   .shape-row:hover { background: var(--panel-2); }
-  .shape-row.selected { background: rgba(74, 158, 255, 0.15); }
+  .shape-row.selected { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
   .shape-row .swatch {
-    width: 12px; height: 12px;
-    border: 1px solid var(--border);
-    border-radius: 2px;
+    width: 14px; height: 14px;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--r-sm);
+    flex-shrink: 0;
   }
   .shape-row .del {
     margin-left: auto;
     background: none;
     border: none;
-    color: var(--danger);
+    color: var(--text-dim);
     cursor: pointer;
-    padding: 0 4px;
+    padding: 2px 6px;
+    border-radius: var(--r-sm);
+    font-size: 14px;
+    line-height: 1;
+    transition: color var(--t-fast) var(--ease-standard), background var(--t-fast) var(--ease-standard);
   }
-  .btn-group { display: flex; gap: 4px; }
-  .btn-group button {
-    flex: 1;
-    background: var(--panel-2);
-    border: 1px solid var(--border);
-    color: var(--text);
-    padding: 6px;
-    border-radius: 4px;
-    cursor: pointer;
-    font-size: 11px;
-  }
-  .btn-group button:hover { background: #3a3a3a; }
+  .shape-row .del:hover { color: var(--danger); background: var(--danger-soft); }
+  .btn-group { display: flex; gap: 6px; }
+  .btn-group button { flex: 1; padding: 8px; }
 
-  /* Context menu */
+  /* Context menu — floating Liquid Glass */
   .ctx-menu {
     position: fixed;
-    background: var(--panel-2);
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    padding: 4px 0;
+    background: var(--glass-thick);
+    backdrop-filter: blur(var(--blur-lg)) saturate(1.5);
+    -webkit-backdrop-filter: blur(var(--blur-lg)) saturate(1.5);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--r-md);
+    padding: 5px;
     z-index: 1000;
-    min-width: 160px;
+    min-width: 168px;
     display: none;
+    box-shadow: var(--shadow-lg), inset 0 1px 0 var(--glass-highlight);
+    transform-origin: top left;
   }
-  .ctx-menu.visible { display: block; }
+  .ctx-menu.visible { display: block; animation: ctxIn var(--t-fast) var(--ease-decel); }
+  @keyframes ctxIn {
+    from { opacity: 0; transform: scale(0.94) translateY(-4px); }
+    to { opacity: 1; transform: scale(1) translateY(0); }
+  }
   .ctx-item {
-    padding: 6px 12px;
+    padding: 7px 11px;
     cursor: pointer;
     font-size: 12px;
+    border-radius: var(--r-sm);
+    color: var(--text-soft);
+    transition: background var(--t-instant) var(--ease-standard), color var(--t-instant) var(--ease-standard);
   }
   .ctx-item:hover { background: var(--accent); color: white; }
-  .ctx-divider { height: 1px; background: var(--border); margin: 4px 0; }
+  .ctx-divider { height: 1px; background: var(--border); margin: 5px 0; }
 
-  /* Update toast */
+  /* Update toast — floating Liquid Glass card */
   .update-toast {
     position: fixed;
     bottom: 20px;
     right: 20px;
-    background: var(--panel-2);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 16px;
+    background: var(--glass-thick);
+    backdrop-filter: blur(var(--blur-lg)) saturate(1.5);
+    -webkit-backdrop-filter: blur(var(--blur-lg)) saturate(1.5);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--r-lg);
+    padding: 18px;
     min-width: 280px;
     max-width: 380px;
     z-index: 100;
     display: none;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+    box-shadow: var(--shadow-lg), inset 0 1px 0 var(--glass-highlight);
   }
-  .update-toast.visible { display: block; }
-  .update-toast h4 { margin: 0 0 6px 0; font-size: 13px; }
-  .update-toast p { margin: 0 0 10px 0; font-size: 12px; color: var(--text-dim); }
+  .update-toast.visible { display: block; animation: toastIn var(--t-slow) var(--ease-emphasized); }
+  @keyframes toastIn {
+    from { opacity: 0; transform: translateY(20px) scale(0.96); }
+    to { opacity: 1; transform: translateY(0) scale(1); }
+  }
+  .update-toast h4 { margin: 0 0 7px 0; font-size: 13px; font-weight: 600; }
+  .update-toast p { margin: 0 0 12px 0; font-size: 12px; color: var(--text-dim); line-height: 1.5; }
   .update-toast .actions { display: flex; gap: 8px; }
   .update-toast button {
-    flex: 1; padding: 6px 12px; border-radius: 4px;
+    flex: 1; padding: 8px 12px; border-radius: var(--r-sm);
     border: 1px solid var(--border); background: var(--panel);
-    color: var(--text); cursor: pointer; font-size: 12px;
+    color: var(--text-soft); cursor: pointer; font-size: 12px; font-weight: 500;
+    font-family: inherit;
+    transition: background var(--t-fast) var(--ease-standard), transform var(--t-instant) var(--ease-standard), color var(--t-fast) var(--ease-standard);
   }
+  .update-toast button:hover { background: var(--panel-3); color: var(--text); }
+  .update-toast button:active { transform: scale(0.97); }
   .update-toast button.primary { background: var(--accent); border-color: var(--accent); color: white; }
+  .update-toast button.primary:hover { background: var(--accent-hover); color: white; }
+
+  /* Caption + shape overlay boxes — smoother selection feedback */
+  .caption-box {
+    transition: border-color var(--t-fast) var(--ease-standard);
+  }
+  /* The currently-spoken word in the on-video caption gets a subtle emphasis. */
+  .caption-box .word-active {
+    display: inline-block;
+    animation: wordPop var(--t-normal) var(--ease-spring);
+  }
+  @keyframes wordPop {
+    0% { transform: scale(1); }
+    40% { transform: scale(1.12); }
+    100% { transform: scale(1); }
+  }
+  /* Live dot for active GPU/transcription state in diagnostics */
+  .live-dot {
+    display: inline-block;
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    background: var(--success);
+    margin-right: 5px;
+    animation: livePulse 1.5s var(--ease-standard) infinite;
+  }
+  @keyframes livePulse {
+    0%, 100% { opacity: 1; box-shadow: 0 0 0 0 var(--success-soft); }
+    50% { opacity: 0.6; box-shadow: 0 0 0 4px transparent; }
+  }
 </style>
 </head>
 <body>
 
 <div class="app">
   <div class="header">
-    <h1>Caption Highlighter</h1>
+    <h1><span class="brand-dot"></span>Caption Highlighter</h1>
     <span class="version" id="versionLabel">v1.1.2</span>
     <div class="header-right">
       <span class="update-pill" id="updatePill">Update available — click to install</span>
-      <button id="checkUpdateBtn" style="background:var(--panel-2);color:var(--text);border:1px solid var(--border);padding:4px 10px;border-radius:4px;cursor:pointer;font-size:11px;">Check for updates</button>
+      <button id="checkUpdateBtn" class="ghost-btn">Check for updates</button>
     </div>
   </div>
 
@@ -496,7 +769,7 @@
         <label>Font <span id="fontSource" style="float:right;color:var(--text-dim);"></span></label>
         <div class="row">
           <select id="fontSelect" style="flex:1;"><option>Arial</option></select>
-          <button id="rescanFontsBtn" style="background:var(--panel-2);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:6px 10px;cursor:pointer;font-size:11px;white-space:nowrap;">Rescan</button>
+          <button id="rescanFontsBtn" class="field-btn">Rescan</button>
         </div>
       </div>
       <div class="field">
@@ -650,31 +923,16 @@
 
     <div class="tab-panel" data-panel="settings">
       <h3 style="margin:0 0 8px 0;font-size:13px;">Auto-updates</h3>
-      <p style="font-size:11px;color:var(--text-dim);margin:0 0 8px 0;">
-        This app's repository is private, so the updater needs a GitHub Personal Access Token to check for new releases.
+      <p style="font-size:11px;color:var(--text-dim);margin:0 0 10px 0;">
+        The app checks for new versions automatically on launch. You can also check manually here.
       </p>
-      <div class="field">
-        <label>GitHub token</label>
-        <input type="password" id="githubToken" placeholder="ghp_… or github_pat_…">
-      </div>
       <div class="btn-group">
-        <button id="saveTokenBtn">Save</button>
-        <button id="testUpdateBtn">Test update check</button>
-        <button id="clearTokenBtn">Clear</button>
+        <button id="testUpdateBtn">Check for updates now</button>
       </div>
       <p id="tokenStatus" style="font-size:11px;color:var(--text-dim);margin:8px 0 12px 0;"></p>
-      <details style="font-size:11px;color:var(--text-dim);">
-        <summary style="cursor:pointer;color:var(--text);">How to create a token</summary>
-        <ol style="padding-left:18px;margin:6px 0;">
-          <li>Go to <span style="color:var(--accent);">github.com/settings/tokens</span></li>
-          <li>Click "Generate new token (classic)"</li>
-          <li>Give it any name (e.g. "Caption app updater")</li>
-          <li>Set expiration as you like (longer = fewer renewals)</li>
-          <li>Under scopes, check only <strong style="color:var(--text);">repo</strong> (full control of private repos)</li>
-          <li>Click "Generate token", copy it, paste it above, and click Save</li>
-        </ol>
-        <p style="margin:6px 0;">The token is stored only on this machine. If you ever want to revoke it, do so on GitHub and clear it here.</p>
-      </details>
+      <p style="font-size:11px;color:var(--text-dim);">
+        Current version: <span id="settingsVersion" style="color:var(--text);"></span>
+      </p>
     </div>
   </div>
 
@@ -789,19 +1047,28 @@ dropZone.addEventListener('drop', (e) => {
 });
 
 async function loadVideo(p) {
-  state.videoPath = p;
-  const info = await window.api.probeVideo(p);
-  state.videoSize = { width: info.width, height: info.height };
-  const vid = $('videoEl');
-  vid.src = pathToFileURL(p);
-  $('videoWrap').style.display = 'block';
-  $('dropZone').style.display = 'none';
-  $('transcribeBtn').disabled = false;
-  $('transcribeBtn').classList.add('ready-hint');
-  $('fullscreenBtn').disabled = false;
-  $('newVideoBtn').disabled = false;
-  updateSizeUI();
-  setStatus(`Loaded ${p.split(/[\\/]/).pop()} (${info.width}×${info.height})`);
+  setStatus('Loading video…');
+  try {
+    const info = await window.api.probeVideo(p);
+    if (!info || !info.width || !info.height) {
+      throw new Error('Could not read video dimensions — the file may be corrupt or an unsupported format.');
+    }
+    state.videoPath = p;
+    state.videoSize = { width: info.width, height: info.height };
+    const vid = $('videoEl');
+    vid.src = pathToFileURL(p);
+    $('videoWrap').style.display = 'block';
+    $('dropZone').style.display = 'none';
+    $('transcribeBtn').disabled = false;
+    $('transcribeBtn').classList.add('ready-hint');
+    $('fullscreenBtn').disabled = false;
+    $('newVideoBtn').disabled = false;
+    updateSizeUI();
+    setStatus(`Loaded ${p.split(/[\\/]/).pop()} (${info.width}×${info.height})`);
+  } catch (e) {
+    setStatus('✗ Failed to load video');
+    alert('Could not load this video:\n' + e.message);
+  }
 }
 
 // Convert a Windows/Unix path to a valid file:// URL (handles spaces, backslashes, etc.)
@@ -930,16 +1197,23 @@ function renderTranscript() {
   area.style.display = 'block';
   const wrap = $('transcriptWords');
   wrap.innerHTML = '';
-  state.words.forEach((w, i) => {
+
+  // Build a quick lookup: global word index -> the word object, and which caption
+  // each word belongs to, so we can render the transcript grouped by caption.
+  // Each caption becomes its own block so it's clear which words appear together
+  // on screen. Line breaks inside a caption wrap to a new visual line.
+  let globalIdx = 0;
+  // Map each caption's word objects back to their global index in state.words.
+  const wordToGlobal = new Map();
+  state.words.forEach((w, i) => wordToGlobal.set(w, i));
+
+  const makeWordSpan = (w) => {
+    const i = wordToGlobal.get(w);
     const span = document.createElement('span');
     span.className = 'transcript-word';
     span.dataset.index = i;
     span.textContent = w.text;
-    span.addEventListener('mousedown', (e) => {
-      // Prevent the browser from starting a text selection on shift-click,
-      // which would otherwise swallow the click and select a range of words.
-      if (e.shiftKey) e.preventDefault();
-    });
+    span.addEventListener('mousedown', (e) => { if (e.shiftKey) e.preventDefault(); });
     span.addEventListener('click', (e) => {
       if (e.shiftKey) {
         e.preventDefault();
@@ -956,25 +1230,40 @@ function renderTranscript() {
       e.preventDefault();
       showWordCtxMenu(e.clientX, e.clientY, i);
     });
-    wrap.appendChild(span);
-    if (w.breakAfter) {
-      const brk = document.createElement('span');
-      brk.textContent = ' ↵';
-      brk.style.cssText = 'color:var(--accent);font-weight:bold;cursor:pointer;padding:0 2px;border-radius:2px;';
-      brk.title = 'Line break here — click to remove';
-      brk.addEventListener('mouseenter', () => { brk.style.background = 'rgba(74,158,255,0.2)'; });
-      brk.addEventListener('mouseleave', () => { brk.style.background = 'transparent'; });
-      brk.addEventListener('click', (e) => {
-        e.stopPropagation();
-        toggleBreak(i);
-        setStatus(`Line break removed after "${w.text}"`);
+    return span;
+  };
+
+  if (!state.captions || state.captions.length === 0) {
+    // Fallback: flat list if captions haven't been grouped yet
+    state.words.forEach(w => { wrap.appendChild(makeWordSpan(w)); wrap.appendChild(document.createTextNode(' ')); });
+    return;
+  }
+
+  state.captions.forEach((cap, ci) => {
+    const block = document.createElement('div');
+    block.className = 'caption-block';
+    // Small header showing the caption's time range
+    const hdr = document.createElement('div');
+    hdr.className = 'caption-block-time';
+    hdr.textContent = `${cap.start.toFixed(1)}s – ${cap.end.toFixed(1)}s`;
+    block.appendChild(hdr);
+
+    const body = document.createElement('div');
+    body.className = 'caption-block-body';
+    const lines = cap.lines && cap.lines.length ? cap.lines : [cap.words.map((_, i) => i)];
+    lines.forEach((lineIdxs, li) => {
+      const lineEl = document.createElement('div');
+      lineEl.className = 'caption-line';
+      lineIdxs.forEach(localIdx => {
+        const w = cap.words[localIdx];
+        if (!w) return;
+        lineEl.appendChild(makeWordSpan(w));
+        lineEl.appendChild(document.createTextNode(' '));
       });
-      wrap.appendChild(brk);
-      // Visually drop to next line in the transcript so breaks are obvious
-      wrap.appendChild(document.createElement('br'));
-    } else {
-      wrap.appendChild(document.createTextNode(' '));
-    }
+      body.appendChild(lineEl);
+    });
+    block.appendChild(body);
+    wrap.appendChild(block);
   });
 }
 
@@ -1107,15 +1396,28 @@ function renderOverlay() {
     setTimeout(renderOverlay, 200);
     return;
   }
-  const videoRect = video.getBoundingClientRect();
+  // The video element fills its box, but object-fit:contain letterboxes the actual
+  // picture inside it. Compute the REAL displayed content rectangle so captions and
+  // shapes align with the visible video, not the (possibly larger) element box.
+  const elRect = video.getBoundingClientRect();
   const wrapRect = $('videoWrap').getBoundingClientRect();
-  // Offset of the video within the wrap (non-zero in fullscreen where the video
-  // is centered/letterboxed inside a larger flex container).
-  const offsetX = videoRect.left - wrapRect.left;
-  const offsetY = videoRect.top - wrapRect.top;
-  const scaleX = videoRect.width / state.videoSize.width;
-  const scaleY = videoRect.height / state.videoSize.height;
-  // Stash for child renderers
+  const vidAR = state.videoSize.width / state.videoSize.height;
+  const elAR = elRect.width / elRect.height;
+  let contentW, contentH;
+  if (elAR > vidAR) {
+    // Element wider than video → pillarbox (bars left/right)
+    contentH = elRect.height;
+    contentW = contentH * vidAR;
+  } else {
+    // Element taller than video → letterbox (bars top/bottom)
+    contentW = elRect.width;
+    contentH = contentW / vidAR;
+  }
+  // Offset of the content box relative to the overlay's origin (the wrap).
+  const offsetX = (elRect.left - wrapRect.left) + (elRect.width - contentW) / 2;
+  const offsetY = (elRect.top - wrapRect.top) + (elRect.height - contentH) / 2;
+  const scaleX = contentW / state.videoSize.width;
+  const scaleY = contentH / state.videoSize.height;
   overlay._offsetX = offsetX;
   overlay._offsetY = offsetY;
 
@@ -1301,7 +1603,13 @@ function rebuildWordsFromCaptions() {
 
 // Re-render overlay continuously while video plays (so highlight follows)
 $('videoEl').addEventListener('timeupdate', renderOverlay);
-window.addEventListener('resize', renderOverlay);
+// Debounce resize with rAF so dragging the window edge doesn't rebuild the
+// overlay dozens of times per second.
+let _resizeRaf = null;
+window.addEventListener('resize', () => {
+  if (_resizeRaf) cancelAnimationFrame(_resizeRaf);
+  _resizeRaf = requestAnimationFrame(() => { _resizeRaf = null; renderOverlay(); });
+});
 
 // ─── SHAPES ──────────────────────────────────────────────────────────────
 function addShape(type) {
@@ -1347,11 +1655,23 @@ function renderShapeList() {
     const row = document.createElement('div');
     row.className = 'shape-row';
     if (state.selectedShape === s.id) row.classList.add('selected');
-    row.innerHTML = `
-      <div class="swatch" style="background:${s.color}"></div>
-      <span>${s.type} #${i + 1} (${s.start.toFixed(1)}-${s.end.toFixed(1)}s)</span>
-      <button class="del" onclick="event.stopPropagation();deleteShape('${s.id}')" title="Delete shape">×</button>
-    `;
+
+    const swatch = document.createElement('div');
+    swatch.className = 'swatch';
+    swatch.style.background = s.color;
+
+    const label = document.createElement('span');
+    label.textContent = `${s.type} #${i + 1} (${s.start.toFixed(1)}-${s.end.toFixed(1)}s)`;
+
+    const del = document.createElement('button');
+    del.className = 'del';
+    del.title = 'Delete shape';
+    del.textContent = '×';
+    del.addEventListener('click', (e) => { e.stopPropagation(); deleteShape(s.id); });
+
+    row.appendChild(swatch);
+    row.appendChild(label);
+    row.appendChild(del);
     row.addEventListener('click', () => { selectShape(s.id); renderOverlay(); });
     list.appendChild(row);
   });
@@ -1589,20 +1909,12 @@ $('fullscreenBtn').addEventListener('click', () => {
 document.addEventListener('fullscreenchange', () => {
   const wrap = $('videoWrap');
   if (document.fullscreenElement === wrap) {
-    // Make the video fill the screen, overlay scales with it
-    wrap.style.width = '100vw';
-    wrap.style.height = '100vh';
-    wrap.style.display = 'flex';
-    wrap.style.alignItems = 'center';
-    wrap.style.justifyContent = 'center';
-    $('videoEl').style.maxHeight = '100vh';
-    $('videoEl').style.maxWidth = '100vw';
+    // Fill the screen; video stays inset:0 with object-fit:contain (auto letterbox).
+    wrap.style.inset = '0';
+    wrap.style.background = '#000';
   } else {
-    wrap.style.width = '';
-    wrap.style.height = '';
-    wrap.style.display = 'block';
-    $('videoEl').style.maxHeight = '';
-    $('videoEl').style.maxWidth = '';
+    wrap.style.inset = '';
+    wrap.style.background = '';
   }
   setTimeout(renderOverlay, 100);
 });
@@ -1789,46 +2101,17 @@ document.addEventListener('keydown', (e) => {
 
 // ─── SETTINGS ────────────────────────────────────────────────────────────
 (async () => {
-  const t = await window.api.getSetting('githubToken');
-  if (t) {
-    $('githubToken').value = t;
-    $('tokenStatus').textContent = '✓ Token saved (auto-update will check on launch)';
-    $('tokenStatus').style.color = 'var(--success)';
-  } else {
-    $('tokenStatus').textContent = 'No token set — auto-update is disabled. Manual install for now.';
-  }
+  const v = await window.api.getAppVersion();
+  const el = $('settingsVersion');
+  if (el) el.textContent = 'v' + v;
 })();
-
-$('saveTokenBtn').addEventListener('click', async () => {
-  const t = $('githubToken').value.trim();
-  if (!t) {
-    $('tokenStatus').textContent = '✗ Empty token. Paste one or click Clear.';
-    $('tokenStatus').style.color = 'var(--danger)';
-    return;
-  }
-  const ok = await window.api.setSetting('githubToken', t);
-  if (ok) {
-    $('tokenStatus').textContent = '✓ Token saved.';
-    $('tokenStatus').style.color = 'var(--success)';
-  } else {
-    $('tokenStatus').textContent = '✗ Could not save token (disk error).';
-    $('tokenStatus').style.color = 'var(--danger)';
-  }
-});
-
-$('clearTokenBtn').addEventListener('click', async () => {
-  $('githubToken').value = '';
-  await window.api.setSetting('githubToken', '');
-  $('tokenStatus').textContent = 'Token cleared.';
-  $('tokenStatus').style.color = 'var(--text-dim)';
-});
 
 $('testUpdateBtn').addEventListener('click', async () => {
   $('tokenStatus').textContent = 'Checking…';
   $('tokenStatus').style.color = 'var(--text-dim)';
   const r = await window.api.checkForUpdate();
   if (r.ok) {
-    $('tokenStatus').textContent = r.info ? '✓ Connected. Latest release: v' + r.info.version : '✓ Connected (no updates available)';
+    $('tokenStatus').textContent = r.info ? '✓ Latest release: v' + r.info.version : '✓ You are up to date';
     $('tokenStatus').style.color = 'var(--success)';
   } else {
     $('tokenStatus').textContent = '✗ ' + (r.error || 'Update check failed');

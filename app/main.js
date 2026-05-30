@@ -30,6 +30,7 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
+      sandbox: true,
     },
     backgroundColor: '#1a1a1a',
     show: false,
@@ -37,6 +38,23 @@ function createWindow() {
 
   mainWindow.once('ready-to-show', () => mainWindow.show());
   mainWindow.loadFile('index.html');
+
+  // ── Security hardening (Electron docs guidance) ──
+  // Block in-app navigation to any external URL and deny all new-window opens.
+  // The app only ever loads its own local index.html; nothing should navigate away.
+  mainWindow.webContents.on('will-navigate', (e, url) => {
+    if (!url.startsWith('file://')) {
+      e.preventDefault();
+      console.warn('Blocked navigation to', url);
+    }
+  });
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    // Open genuine external links in the user's browser, never in-app.
+    if (url.startsWith('http://') || url.startsWith('https://')) {
+      shell.openExternal(url);
+    }
+    return { action: 'deny' };
+  });
 
   // Strip the default menu in production, keep DevTools in dev
   if (isPackaged) {
@@ -46,17 +64,13 @@ function createWindow() {
 
 app.whenReady().then(() => {
   createWindow();
-  // Auto-check for updates 3s after launch — but only if a token is configured
-  // (private repos require one, and checking without it just throws a 404 error
-  // that would alarm the user). They can always check manually from settings.
+  // Auto-check for updates 3s after launch. The repo is public, so the updater
+  // reads the public releases feed — no token or auth needed.
   if (isPackaged) {
     setTimeout(() => {
-      const hasToken = applyUpdaterToken();
-      if (hasToken) {
-        autoUpdater.checkForUpdates().catch(err => {
-          console.log('Update check failed:', err.message);
-        });
-      }
+      autoUpdater.checkForUpdates().catch(err => {
+        console.log('Update check failed:', err.message);
+      });
     }, 3000);
   }
 });
@@ -91,6 +105,10 @@ ipcMain.handle('get-setting', (_e, key) => {
   return s[key] ?? null;
 });
 ipcMain.handle('set-setting', (_e, key, value) => {
+  // Basic validation: key must be a plain string and not a prototype-pollution vector.
+  if (typeof key !== 'string' || ['__proto__', 'constructor', 'prototype'].includes(key)) {
+    return false;
+  }
   return saveSettings({ [key]: value });
 });
 
@@ -105,25 +123,11 @@ autoUpdater.logger = {
   debug: () => {},
 };
 
-// For private GitHub repos, the updater needs a token. We read it from settings
-// and apply it before each check via setFeedURL.
+// The repo is public, so the updater auto-detects owner/repo from package.json's
+// publish config and reads the public release feed — no token or setFeedURL needed.
+// (Kept as a no-op so existing call sites don't need removing.)
 function applyUpdaterToken() {
-  const settings = loadSettings();
-  const token = settings.githubToken;
-  if (!token) return false;
-  try {
-    autoUpdater.setFeedURL({
-      provider: 'github',
-      owner: 'jdavis7903',
-      repo: 'caption-highlighter',
-      private: true,
-      token: token,
-    });
-    return true;
-  } catch (e) {
-    console.error('Failed to set updater feed URL:', e);
-    return false;
-  }
+  return false;
 }
 
 autoUpdater.on('update-available', (info) => {
@@ -497,10 +501,21 @@ function safeRmDir(dir) {
 // quality: 'standard' (CRF 20) or 'intermediate' (CRF 12, slow preset)
 // exportSize: { width, height } target resolution, or null/undefined to match source
 function renderVideo({ videoPath, captions, shapes, style, videoSize, outPath, quality, exportSize }) {
+  // Validate the essential inputs up front so a malformed payload fails with a
+  // clear message instead of throwing deep inside the filter construction.
+  if (!videoPath || typeof videoPath !== 'string') {
+    return Promise.reject(new Error('No video path provided to renderer.'));
+  }
+  if (!outPath || typeof outPath !== 'string') {
+    return Promise.reject(new Error('No output path provided to renderer.'));
+  }
+  if (!videoSize || !Number.isFinite(videoSize.width) || !Number.isFinite(videoSize.height)) {
+    return Promise.reject(new Error('Invalid video dimensions.'));
+  }
   // Build ASS subtitle file (always at SOURCE resolution; we scale the whole frame last)
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'caphi-export-'));
   const assPath = path.join(tmpDir, 'subs.ass');
-  fs.writeFileSync(assPath, buildAss(captions, style, videoSize), 'utf-8');
+  fs.writeFileSync(assPath, buildAss(captions || [], style || {}, videoSize), 'utf-8');
 
   const escAss = assPath.replace(/\\/g, '/').replace(/:/g, '\\:');
   const filters = [];
@@ -511,14 +526,21 @@ function renderVideo({ videoPath, captions, shapes, style, videoSize, outPath, q
     const end = Number.isFinite(s.end) ? s.end : start + 3;
     const enable = `between(t,${start.toFixed(3)},${end.toFixed(3)})`;
     const color = hexToFfColor(s.color, s.opacity ?? 1);
+    // Guard every numeric against NaN/Infinity — a single bad value would make
+    // ffmpeg reject the whole filter chain and fail the entire export.
+    const ix = Number.isFinite(s.x) ? Math.round(s.x) : 0;
+    const iy = Number.isFinite(s.y) ? Math.round(s.y) : 0;
+    const iw = Number.isFinite(s.w) ? Math.max(1, Math.round(s.w)) : 10;
+    const ih = Number.isFinite(s.h) ? Math.max(1, Math.round(s.h)) : 10;
+    const stroke = Number.isFinite(s.stroke) ? Math.max(1, Math.round(s.stroke)) : 2;
     if (s.type === 'rect' || s.type === 'circle') {
       filters.push(
-        `drawbox=x=${Math.round(s.x)}:y=${Math.round(s.y)}:w=${Math.round(s.w)}:h=${Math.round(s.h)}:` +
-        `color=${color}:t=${s.filled ? 'fill' : Math.max(1, s.stroke || 2)}:enable='${enable}'`
+        `drawbox=x=${ix}:y=${iy}:w=${iw}:h=${ih}:` +
+        `color=${color}:t=${s.filled ? 'fill' : stroke}:enable='${enable}'`
       );
     } else if (s.type === 'line') {
       filters.push(
-        `drawbox=x=${Math.round(s.x)}:y=${Math.round(s.y)}:w=${Math.round(s.w)}:h=${Math.max(1, s.h)}:` +
+        `drawbox=x=${ix}:y=${iy}:w=${iw}:h=${ih}:` +
         `color=${color}:t=fill:enable='${enable}'`
       );
     }
