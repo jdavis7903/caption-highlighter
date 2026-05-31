@@ -550,8 +550,12 @@ function renderVideo({ videoPath, captions, shapes, style, videoSize, outPath, q
   fs.writeFileSync(assPath, buildAss(captions || [], style || {}, videoSize), 'utf-8');
 
   const escAss = assPath.replace(/\\/g, '/').replace(/:/g, '\\:');
+  const srcW = videoSize.width, srcH = videoSize.height;
   const filters = [];
-  filters.push(`subtitles='${escAss}'`);
+  // Pass original_size so libass renders the ASS at the true video resolution
+  // (PlayResX/Y). Without it, libass can render at a default canvas and ffmpeg
+  // scales the result, which makes burned-in text blurry. This keeps it crisp.
+  filters.push(`subtitles='${escAss}':original_size=${srcW}x${srcH}`);
 
   for (const s of shapes || []) {
     const start = Number.isFinite(s.start) ? s.start : 0;
@@ -582,7 +586,6 @@ function renderVideo({ videoPath, captions, shapes, style, videoSize, outPath, q
   // Captions and shapes were drawn at source res, so scaling last keeps them aligned.
   // We fit within the target box preserving aspect ratio, then pad to exact dimensions
   // (letterbox/pillarbox) so the output is exactly the requested resolution.
-  const srcW = videoSize.width, srcH = videoSize.height;
   if (exportSize && exportSize.width && exportSize.height &&
       (exportSize.width !== srcW || exportSize.height !== srcH)) {
     const tw = Math.round(exportSize.width / 2) * 2;   // ensure even (yuv420p needs it)
@@ -785,6 +788,9 @@ function buildAss(captions, style, videoSize) {
   const outlineW = style.noOutline ? 0 : 3;   // Outline thickness (0 = none)
   const shadowW = style.noOutline ? 0 : 1;    // Shadow off when no outline
   const effect = style.effect || 'none';
+  const leading = parseInt(style.leading, 10) || 0;
+  // Per-line vertical step: default leading is ~1.2× font size; add user leading.
+  const lineStep = Math.round(size * 1.2 + leading);
 
   // Drop shadow → ASS inline overrides. ASS supports independent X/Y shadow
   // offsets (\xshad, \yshad), shadow colour (\4c) and shadow alpha (\4a), which
@@ -817,6 +823,10 @@ function buildAss(captions, style, videoSize) {
     // applied inline via \3c + \bord overrides (see renderWord), so no separate
     // Box style is needed here.
     `Style: Default,${font},${size},${baseColor},${baseColor},${outline},&H80000000,${bold},${italic},0,0,100,100,0,0,1,${outlineW},${shadowW},5,30,30,30,1`,
+    // Box style: BorderStyle 3 = opaque box drawn behind the text (a true
+    // rectangle, unlike the glyph-hugging \bord hack). Used for the highlight
+    // box on the active word. Outline field doubles as box padding here.
+    `Style: Box,${font},${size},${highlightColor},${highlightColor},${boxColor},${boxColor},${bold},${italic},0,0,100,100,0,0,3,4,0,5,30,30,30,1`,
     '',
     '[Events]',
     'Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text',
@@ -847,7 +857,9 @@ function buildAss(captions, style, videoSize) {
           scaleOut = '';
         }
         if (useBox) {
-          return `{\\c${highlightColor}\\3c${boxColor}\\bord6\\shad0${scaleIn}}${escAss(word.text)}{\\c${baseColor}\\3c${outline}\\bord${outlineW}\\shad${shadowW}\\fscx100\\fscy100}`;
+          // Switch the active word to the opaque-box "Box" style (true rectangle),
+          // then reset back to Default for the rest of the line.
+          return `{\\rBox${scaleIn}}${escAss(word.text)}{\\r\\fscx100\\fscy100}`;
         }
         return `{\\c${highlightColor}${scaleIn}}${escAss(word.text)}{\\c${baseColor}\\fscx100\\fscy100}`;
       }
@@ -866,26 +878,46 @@ function buildAss(captions, style, videoSize) {
       return parts.join('');
     };
 
+    // Render a single line's text (with the active word highlighted).
+    const buildLine = (lineIndices, activeIdx) => {
+      const parts = [];
+      lineIndices.forEach((wIdx, j) => {
+        if (j > 0) parts.push(' ');
+        parts.push(renderWord(cap.words[wIdx], wIdx, activeIdx));
+      });
+      return parts.join('');
+    };
+    // Y position for line `idx` so the block stays vertically centered on py.
+    const lineY = (idx) => {
+      const n = lines.length;
+      const blockTop = py - ((n - 1) * lineStep) / 2;
+      return Math.round(blockTop + idx * lineStep);
+    };
+    // True when we must emit per-line events (custom leading on a multi-line cap).
+    const customLeading = (leading !== 0 && lines.length > 1);
+
     if (effect === 'slidefade') {
-      // ── Entrance + per-word highlight as TWO layers ──
-      // Layer 0: the whole caption rises from below with a fade, shown for its
-      // full duration (no per-word highlight changes — keeps the move smooth).
-      const riseY = py + Math.round(H * 0.06);
+      // ── Single-layer entrance: the caption rises from below with a fade during
+      // its first word, then holds position while words highlight in turn. One
+      // event per word (no overlapping layers — that was causing doubled text).
+      const riseY = py + Math.round(H * 0.05);
       const moveDur = 300;
-      const introEnd = capStart + moveDur / 1000;
-      events.push(
-        `Dialogue: 0,${assTime(capStart)},${assTime(capEnd)},Default,,0,0,0,,` +
-        `{\\an5${shadowTag}\\move(${px},${riseY},${px},${py},0,${moveDur})\\fad(${moveDur},0)}` + buildBody(-1)
-      );
-      // Layer 1: per-word highlight overlaid on top, starting after the intro.
       for (let i = 0; i < cap.words.length; i++) {
         const w = cap.words[i];
-        const s = Math.max(w.start, introEnd);
-        if (s >= w.end) continue;
-        events.push(
-          `Dialogue: 1,${assTime(s)},${assTime(w.end)},Default,,0,0,0,,` +
-          `{\\pos(${px},${py})\\an5${shadowTag}}` + buildBody(i)
-        );
+        let intro = '';
+        if (i === 0) {
+          // First word: slide up + fade in over moveDur, relative to this event.
+          intro = `\\move(${px},${riseY},${px},${py},0,${moveDur})\\fad(${moveDur},0)`;
+          events.push(
+            `Dialogue: 0,${assTime(w.start)},${assTime(w.end)},Default,,0,0,0,,` +
+            `{\\an5${shadowTag}${intro}}` + buildBody(i)
+          );
+        } else {
+          events.push(
+            `Dialogue: 0,${assTime(w.start)},${assTime(w.end)},Default,,0,0,0,,` +
+            `{\\pos(${px},${py})\\an5${shadowTag}}` + buildBody(i)
+          );
+        }
       }
       continue;
     }
@@ -983,22 +1015,29 @@ function buildAss(captions, style, videoSize) {
     }
 
     if (effect === 'cascade') {
-      // ── Staircase: each word on its own line, indented progressively right.
-      // Rendered as a per-word karaoke highlight but with a custom stacked layout.
-      const lineHeight = Math.round(size * 1.1);
-      const indent = Math.round(size * 0.6);
-      const flatWords = cap.words;
-      for (let i = 0; i < flatWords.length; i++) {
-        const w = flatWords[i];
-        // Build the stacked block with word i highlighted
-        const stacked = flatWords.map((ww, k) => {
-          const pad = ' '.repeat(0); // horizontal offset done via \pos per line instead
-          const col = (k === i) ? highlightColor : baseColor;
-          return `{\\pos(${px + k * indent},${py + k * lineHeight - (flatWords.length - 1) * lineHeight / 2})\\an4\\c${col}${shadowTag}}${escAss(ww.text)}`;
-        });
-        // Each stacked word is its own positioned event for this time slice
-        stacked.forEach(s => {
-          events.push(`Dialogue: 0,${assTime(w.start)},${assTime(w.end)},Default,,0,0,0,,${s}`);
+      // ── Staircase by LINE: each caption line steps right + down a fixed amount
+      // (not per word). Capped at 3 visual lines so it doesn't over-spread.
+      const cascadeLines = lines.slice(0, 3);
+      const lineHeight = lineStep;                 // honors leading too
+      const indent = Math.round(size * 0.9);
+      const n = cascadeLines.length;
+      // For each word's time slice, render every line with that word highlighted.
+      for (let i = 0; i < cap.words.length; i++) {
+        const w = cap.words[i];
+        cascadeLines.forEach((lineIdxs, li) => {
+          const lx = px + li * indent;
+          const ly = py + li * lineHeight - (n - 1) * lineHeight / 2;
+          const inner = lineIdxs.map((wi, j) => {
+            const ww = cap.words[wi];
+            if (!ww) return '';
+            const piece = escAss(ww.text);
+            if (wi === i) return `{\\c${highlightColor}}${piece}{\\c${baseColor}}`;
+            return piece;
+          }).join(' ');
+          events.push(
+            `Dialogue: 0,${assTime(w.start)},${assTime(w.end)},Default,,0,0,0,,` +
+            `{\\pos(${lx},${Math.round(ly)})\\an4\\c${baseColor}${shadowTag}}${inner}`
+          );
         });
       }
       continue;
@@ -1007,10 +1046,21 @@ function buildAss(captions, style, videoSize) {
     // ── Default + scalepop: per-word highlight re-render ──
     for (let i = 0; i < cap.words.length; i++) {
       const w = cap.words[i];
-      const text = `{\\pos(${px},${py})\\an5${shadowTag}}` + buildBody(i);
-      events.push(
-        `Dialogue: 0,${assTime(w.start)},${assTime(w.end)},Default,,0,0,0,,${text}`
-      );
+      if (customLeading) {
+        // Emit each line as its own positioned event at a custom Y, so the gap
+        // between lines honors the leading value (ASS has no line-spacing tag).
+        lines.forEach((lineIndices, lineIdx) => {
+          events.push(
+            `Dialogue: 0,${assTime(w.start)},${assTime(w.end)},Default,,0,0,0,,` +
+            `{\\pos(${px},${lineY(lineIdx)})\\an5${shadowTag}}` + buildLine(lineIndices, i)
+          );
+        });
+      } else {
+        const text = `{\\pos(${px},${py})\\an5${shadowTag}}` + buildBody(i);
+        events.push(
+          `Dialogue: 0,${assTime(w.start)},${assTime(w.end)},Default,,0,0,0,,${text}`
+        );
+      }
     }
   }
 

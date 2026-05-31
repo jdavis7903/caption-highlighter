@@ -883,6 +883,11 @@
         <label>Lines per caption (max)</label>
         <input type="number" id="linesPerCap" value="2" min="1" max="4">
       </div>
+      <div class="field">
+        <label>Line spacing (leading) <span class="slider-val" id="leadingHint">px between lines</span></label>
+        <input type="number" id="leading" value="0" min="-40" max="120" step="1">
+        <p style="font-size:10px;color:var(--text-dim);margin:5px 0 0;">0 = font default. Positive opens lines up, negative tightens them.</p>
+      </div>
       <p style="font-size:11px;color:var(--text-dim);margin-top:12px;">
         💡 Drag captions on the video to reposition. Double-click to edit text directly.
       </p>
@@ -1017,6 +1022,7 @@
       <div class="video-wrap" id="videoWrap" style="display:none;">
         <video id="videoEl" controls></video>
         <div class="overlay" id="overlay"></div>
+        <canvas id="ballCanvas" style="position:absolute;inset:0;pointer-events:none;"></canvas>
       </div>
     </div>
     <div class="transcript-area" id="transcriptArea" style="display:none;">
@@ -1450,6 +1456,144 @@ function splitWord(idx) {
   renderOverlay();
 }
 
+// ─── BOUNCING BALL ANIMATOR (preview) ────────────────────────────────────
+// Mirrors the export renderer's math: Bezier easing, tapered trail, landing
+// overshoot + squash. Draws on #ballCanvas in a rAF loop synced to the video.
+const ballEase = (function () {
+  function cb(p1x, p1y, p2x, p2y) {
+    function sx(t){const c=3*p1x,b=3*(p2x-p1x)-c,a=1-c-b;return((a*t+b)*t+c)*t;}
+    function sy(t){const c=3*p1y,b=3*(p2y-p1y)-c,a=1-c-b;return((a*t+b)*t+c)*t;}
+    function dx(t){const c=3*p1x,b=3*(p2x-p1x)-c,a=1-c-b;return(3*a*t+2*b)*t+c;}
+    return function(x){let t=x;for(let i=0;i<6;i++){const xe=sx(t)-x,d=dx(t);if(Math.abs(xe)<1e-4||d===0)break;t-=xe/d;}return sy(t);};
+  }
+  return cb(0.42, 0, 0.58, 1);
+})();
+
+let ballCaptionData = null; // {targets:[{x,y,start,end}], ballR, arcH, arcLift, color}
+
+function registerBallCaption(cap, div, scaleX, scaleY, offsetX, offsetY) {
+  // Measure each word's on-screen center from the ALREADY-RENDERED word spans
+  // (tagged .cap-word with data-wi). We must not overwrite div.innerHTML here or
+  // the caption would lose its highlight styling.
+  const flat = (cap.lines || [cap.words.map((_, i) => i)]).flat();
+  const words = flat.map(i => cap.words[i]).filter(Boolean);
+  if (!words.length) { ballCaptionData = null; return; }
+
+  const wrapRect = $('videoWrap').getBoundingClientRect();
+  // Map word-index → span so we follow the flattened spoken order reliably.
+  const spanByWi = new Map();
+  div.querySelectorAll('.cap-word').forEach(sp => spanByWi.set(parseInt(sp.dataset.wi, 10), sp));
+
+  const targets = [];
+  for (const wi of flat) {
+    const sp = spanByWi.get(wi);
+    const w = cap.words[wi];
+    if (!sp || !w) continue;
+    const r = sp.getBoundingClientRect();
+    targets.push({
+      x: r.left - wrapRect.left + r.width / 2,
+      y: r.top - wrapRect.top,            // top of the word (ball lands here)
+      start: w.start,
+      end: w.end,
+    });
+  }
+  if (!targets.length) { ballCaptionData = null; return; }
+  const fontPx = $('fontSize').value * scaleY;
+  ballCaptionData = {
+    targets,
+    ballR: Math.max(4, fontPx * 0.16),
+    arcH: fontPx * 0.9,
+    arcLift: fontPx * 0.12,
+    color: $('highlightColor').value,
+  };
+}
+
+function drawBallFrame() {
+  const canvas = $('ballCanvas');
+  if (!canvas) return;
+  // Cheap exit when the effect isn't active or no video is loaded.
+  if ($('captionEffect').value !== 'bounceball' || !state.videoPath) {
+    if (canvas._dirty) { const c = canvas.getContext('2d'); c.clearRect(0,0,canvas.width,canvas.height); canvas._dirty = false; }
+    return;
+  }
+  canvas._dirty = true;
+  const wrap = $('videoWrap').getBoundingClientRect();
+  if (canvas.width !== Math.round(wrap.width) || canvas.height !== Math.round(wrap.height)) {
+    canvas.width = Math.round(wrap.width);
+    canvas.height = Math.round(wrap.height);
+  }
+  const cx = canvas.getContext('2d');
+  cx.clearRect(0, 0, canvas.width, canvas.height);
+  if (!ballCaptionData) return;
+  const d = ballCaptionData;
+  const t = $('videoEl').currentTime;
+  const targets = d.targets;
+  if (!targets.length) return;
+  // Only draw if within the caption's active window (plus a lead-in).
+  if (t < targets[0].start - 0.3 || t > targets[targets.length - 1].end + 0.3) return;
+
+  let i = 0;
+  while (i < targets.length - 1 && t >= targets[i + 1].start) i++;
+  const cur = targets[i], prev = targets[i - 1] || targets[i];
+  const dur = Math.max(0.001, cur.end - cur.start);
+  let p = Math.max(0, Math.min(1, (t - cur.start) / dur));
+  const ex = ballEase(p);
+  const x = prev.x + (cur.x - prev.x) * ex;
+  const restY = cur.y - d.ballR - d.arcLift;
+  let h;
+  if (p < 0.8) h = d.arcH * Math.sin(Math.PI * (1 - p / 0.8) / 2);
+  else { const op = (p - 0.8) / 0.2; h = -d.ballR * 0.35 * Math.sin(op * Math.PI) * (1 - op * 0.4); }
+  const y = restY - h;
+  let sx = 1, sy = 1;
+  if (p > 0.72 && p < 0.92) { const k = 1 - Math.abs(p - 0.82) / 0.1; sx = 1 + 0.25 * k; sy = 1 - 0.22 * k; }
+
+  // tapered trail
+  const samples = 10, back = 0.16;
+  cx.lineCap = 'round';
+  for (let s = 0; s < samples; s++) {
+    const ts = t - (s / samples) * back;
+    let pp = Math.max(0, Math.min(1, (ts - cur.start) / dur));
+    const exx = ballEase(pp);
+    const xx = prev.x + (cur.x - prev.x) * exx;
+    let hh; if (pp < 0.8) hh = d.arcH * Math.sin(Math.PI * (1 - pp / 0.8) / 2);
+    else { const op = (pp - 0.8) / 0.2; hh = -d.ballR * 0.35 * Math.sin(op * Math.PI); }
+    const yy = restY - hh;
+    const ts2 = t - ((s + 1) / samples) * back;
+    let pp2 = Math.max(0, Math.min(1, (ts2 - cur.start) / dur));
+    const xx2 = prev.x + (cur.x - prev.x) * ballEase(pp2);
+    let hh2; if (pp2 < 0.8) hh2 = d.arcH * Math.sin(Math.PI * (1 - pp2 / 0.8) / 2);
+    else { const op = (pp2 - 0.8) / 0.2; hh2 = -d.ballR * 0.35 * Math.sin(op * Math.PI); }
+    const yy2 = restY - hh2;
+    cx.strokeStyle = hexAlpha(d.color, (1 - s / samples) * 0.5);
+    cx.lineWidth = Math.max(0.5, d.ballR * 2 * (1 - s / samples) * 0.7);
+    cx.beginPath(); cx.moveTo(xx, yy); cx.lineTo(xx2, yy2); cx.stroke();
+  }
+  // ball + glow + highlight
+  cx.save();
+  cx.shadowColor = hexAlpha(d.color, 0.8);
+  cx.shadowBlur = d.ballR * 1.4;
+  cx.translate(x, y); cx.scale(sx, sy);
+  cx.fillStyle = d.color;
+  cx.beginPath(); cx.arc(0, 0, d.ballR, 0, Math.PI * 2); cx.fill();
+  const g = cx.createRadialGradient(-d.ballR * 0.3, -d.ballR * 0.3, d.ballR * 0.1, 0, 0, d.ballR);
+  g.addColorStop(0, hexAlpha('#FFFFFF', 0.55)); g.addColorStop(0.5, hexAlpha(d.color, 0));
+  cx.fillStyle = g; cx.beginPath(); cx.arc(0, 0, d.ballR, 0, Math.PI * 2); cx.fill();
+  cx.restore();
+}
+
+function hexAlpha(hex, a) {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex || '#FFFFFF');
+  const n = m ? m[1] : 'FFFFFF';
+  return `rgba(${parseInt(n.slice(0,2),16)},${parseInt(n.slice(2,4),16)},${parseInt(n.slice(4,6),16)},${a})`;
+}
+
+// Animation loop — runs continuously; cheap when effect isn't bounceball.
+function ballLoop() {
+  drawBallFrame();
+  requestAnimationFrame(ballLoop);
+}
+requestAnimationFrame(ballLoop);
+
 // ─── OVERLAY (captions + shapes on video) ────────────────────────────────
 function renderOverlay() {
   const overlay = $('overlay');
@@ -1513,7 +1657,14 @@ function renderCaptionBox(cap, scaleX, scaleY, offsetX = 0, offsetY = 0) {
   div.style.left = (offsetX + pos.x * scaleX) + 'px';
   div.style.top = (offsetY + pos.y * scaleY) + 'px';
   div.style.fontFamily = $('fontSelect').value || 'Arial';
-  div.style.fontSize = ($('fontSize').value * scaleY * 0.5) + 'px';
+  // Preview font must match export: a glyph of `size` px at SOURCE resolution
+  // displays at size*scaleY px in the preview. (No arbitrary fudge factor — that
+  // was the cause of the preview/export size mismatch.)
+  const previewFontPx = $('fontSize').value * scaleY;
+  div.style.fontSize = previewFontPx + 'px';
+  // Leading: default line gap is ~1.2em; add the user's leading (scaled to preview).
+  const leadingPx = (parseInt($('leading').value, 10) || 0) * scaleY;
+  div.style.lineHeight = (previewFontPx * 1.2 + leadingPx) + 'px';
   div.style.fontWeight = $('boldCheck').checked ? 'bold' : 'normal';
   div.style.fontStyle = $('italicCheck').checked ? 'italic' : 'normal';
   div.style.color = $('baseColor').value;
@@ -1522,8 +1673,8 @@ function renderCaptionBox(cap, scaleX, scaleY, offsetX = 0, offsetY = 0) {
   // scaled to the preview so it visually matches the exported result.
   if ($('shadowCheck').checked) {
     const ang = parseInt($('shadowAngle').value, 10) * Math.PI / 180;
-    const dist = parseInt($('shadowDistance').value, 10) * scaleY * 0.5;
-    const blur = parseInt($('shadowBlur').value, 10) * scaleY * 0.5;
+    const dist = parseInt($('shadowDistance').value, 10) * scaleY;
+    const blur = parseInt($('shadowBlur').value, 10) * scaleY;
     const dx = Math.cos(ang) * dist;
     const dy = Math.sin(ang) * dist;
     const op = parseInt($('shadowOpacity').value, 10) / 100;
@@ -1543,57 +1694,60 @@ function renderCaptionBox(cap, scaleX, scaleY, offsetX = 0, offsetY = 0) {
       if (!w) return '';  // guard against stale line indices after edits
       const highlighted = t >= w.start && t <= w.end;
       const color = highlighted ? $('highlightColor').value : $('baseColor').value;
-      // Scale-pop: active word grows in the preview to match the exported \t effect.
-      const scale = (effect === 'scalepop' && highlighted) ? 'display:inline-block;transform:scale(1.18);' : '';
+      // Scale-pop: active word grows. Use inline-block + transform but keep the
+      // transform-origin centered so it grows symmetrically; add horizontal margin
+      // equal to the growth so neighbors are pushed apart and tracking stays right.
+      let scale = '';
+      if (effect === 'scalepop' && highlighted) {
+        const grow = 0.18;            // 118%
+        const fontPx = $('fontSize').value * scaleY;
+        const pad = Math.round(fontPx * grow * 0.5); // half the growth on each side
+        scale = `display:inline-block;transform:scale(${1 + grow});transform-origin:center;margin:0 ${pad}px;`;
+      }
       if (highlighted && $('highlightBoxCheck').checked) {
         const boxColor = $('highlightBoxColor').value;
-        return `<span style="color:${color};background:${boxColor};padding:0 2px;border-radius:2px;${scale}">${escapeHtml(w.text)}</span>`;
+        return `<span class="cap-word" data-wi="${wi}" style="color:${color};background:${boxColor};padding:0 2px;border-radius:2px;${scale}">${escapeHtml(w.text)}</span>`;
       }
-      return `<span style="color:${color};${scale}">${escapeHtml(w.text)}</span>`;
+      return `<span class="cap-word" data-wi="${wi}" style="color:${color};${scale}">${escapeHtml(w.text)}</span>`;
     }).join(' ');
   });
-  // Cascade: stack words as a right-stepping staircase in the preview.
+  // Cascade: each LINE steps right a fixed amount (not每 word). Uses the caption's
+  // existing line grouping (capped at 3 visual lines) so it doesn't over-spread.
   if (effect === 'cascade') {
-    const flat = lines.flat();
-    div.innerHTML = flat.map((wi, k) => {
-      const w = cap.words[wi];
-      if (!w) return '';
-      const highlighted = t >= w.start && t <= w.end;
-      const color = highlighted ? $('highlightColor').value : $('baseColor').value;
-      return `<div style="margin-left:${k * 1.2}em;color:${color};white-space:nowrap;">${escapeHtml(w.text)}</div>`;
+    const stepEm = 0.9;               // modest rightward step per line
+    const cascadeLines = lines.slice(0, 3);
+    div.innerHTML = cascadeLines.map((lineIdxs, li) => {
+      const inner = lineIdxs.map(wi => {
+        const w = cap.words[wi];
+        if (!w) return '';
+        const highlighted = t >= w.start && t <= w.end;
+        const color = highlighted ? $('highlightColor').value : $('baseColor').value;
+        return `<span class="cap-word" data-wi="${wi}" style="color:${color};">${escapeHtml(w.text)}</span>`;
+      }).join(' ');
+      return `<div style="margin-left:${li * stepEm}em;white-space:nowrap;">${inner}</div>`;
     }).join('');
   } else {
     div.innerHTML = lineDivs.join('<br>');
   }
 
-  // Bouncing ball preview: place a dot above the active word, dipping toward it
-  // based on how far through the word the playhead is (mirrors the export arc).
+  // Bouncing ball preview: the ball is drawn on the dedicated #ballCanvas layer.
+  // The text is already rendered above (with .cap-word spans); we just measure it.
   if (effect === 'bounceball') {
-    // wrap each word in a measurable span so we can find the active one
-    const flat = lines.flat();
-    div.innerHTML = flat.map((wi, k) => {
-      const w = cap.words[wi];
-      if (!w) return '';
-      const highlighted = t >= w.start && t <= w.end;
-      const color = highlighted ? $('highlightColor').value : $('baseColor').value;
-      return `<span class="bb-word" data-k="${k}" style="color:${color};position:relative;">${escapeHtml(w.text)}</span>`;
-    }).join(' ');
-    // After layout, drop a ball above the active word.
-    requestAnimationFrame(() => {
-      const active = flat.findIndex(wi => { const w = cap.words[wi]; return w && t >= w.start && t <= w.end; });
-      if (active < 0) return;
-      const span = div.querySelector(`.bb-word[data-k="${active}"]`);
-      if (!span) return;
-      const w = cap.words[flat[active]];
-      const prog = Math.max(0, Math.min(1, (t - w.start) / Math.max(0.001, w.end - w.start)));
-      const dip = Math.sin(Math.PI * (1 - prog) / 2); // 1 high → 0 landed
-      const r = Math.max(4, ($('fontSize').value * scaleY * 0.5) * 0.16);
-      const ball = document.createElement('div');
-      ball.style.cssText = `position:absolute;width:${r*2}px;height:${r*2}px;border-radius:50%;` +
-        `background:${$('highlightColor').value};left:${span.offsetLeft + span.offsetWidth/2 - r}px;` +
-        `top:${span.offsetTop - r*2 - 4 - dip * r * 4}px;pointer-events:none;`;
-      div.appendChild(ball);
-    });
+    requestAnimationFrame(() => registerBallCaption(cap, div, scaleX, scaleY, offsetX, offsetY));
+  }
+
+  // Slide+fade preview: during the caption's first ~300ms, rise from below + fade.
+  if (effect === 'slidefade') {
+    const capStart = cap.words[0].start;
+    const t2 = $('videoEl').currentTime;
+    const into = t2 - capStart;          // seconds since caption appeared
+    if (into >= 0 && into < 0.3) {
+      const p = into / 0.3;              // 0→1
+      const ease = 1 - Math.pow(1 - p, 3); // ease-out cubic
+      const rise = (1 - ease) * (state.videoSize.height * scaleY * 0.05);
+      div.style.opacity = ease.toFixed(2);
+      div.style.transform = `translate(-50%, calc(-50% + ${rise.toFixed(1)}px))`;
+    }
   }
 
   // Drag handler — uses global activeDrag, single document listeners (no accumulation).
@@ -1868,6 +2022,7 @@ function buildStyle() {
     shadowDistance: parseInt($('shadowDistance').value, 10),
     shadowBlur: parseInt($('shadowBlur').value, 10),
     effect: $('captionEffect').value,
+    leading: parseInt($('leading').value, 10) || 0,
   };
 }
 
@@ -2135,6 +2290,7 @@ Object.entries(shadowSliders).forEach(([id, fmt]) => {
 });
 $('shadowColor').addEventListener('input', renderOverlay);
 $('captionEffect').addEventListener('change', renderOverlay);
+$('leading').addEventListener('input', renderOverlay);
 
 ['fontSelect', 'fontSize', 'baseColor', 'highlightColor', 'outlineColor', 'boldCheck', 'italicCheck', 'noOutlineCheck'].forEach(id => {
   $(id).addEventListener('input', renderOverlay);
